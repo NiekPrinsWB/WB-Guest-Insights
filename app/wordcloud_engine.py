@@ -1,9 +1,15 @@
 """
 Westerbergen Guest Insights - Word Cloud & Sentiment Trends Engine
 Uses TF-IDF with domain-specific stopwords for meaningful word clouds.
+Sentiment analysis powered by nlptown/bert-base-multilingual-uncased-sentiment.
 """
 import re
+import json
+import hashlib
+import logging
+import subprocess
 from io import BytesIO
+from pathlib import Path
 from collections import Counter
 
 import pandas as pd
@@ -12,6 +18,200 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from wordcloud import WordCloud
 
 from app.config import COLORS
+
+log = logging.getLogger(__name__)
+
+# ============================================================
+# BERT Sentiment Model
+# ============================================================
+# Strategy:
+#   1. Direct import (transformers + torch available → Streamlit Cloud or compatible Python)
+#   2. Subprocess to Python 3.13 (local Windows with Python 3.14 beta)
+#   3. Regex fallback (if neither works)
+
+_SENTIMENT_CACHE: dict[str, str] = {}  # text → "positive"/"negative"/"neutral"
+_CACHE_FILE = Path(__file__).parent.parent / "data" / "sentiment_cache.json"
+_MODEL_PIPELINE = None  # Lazy-loaded transformers pipeline
+_MODEL_MODE = None      # "direct" | "subprocess" | "regex"
+
+
+def _detect_model_mode() -> str:
+    """Detect which sentiment model strategy to use."""
+    # Strategy 1: Direct import (Streamlit Cloud, or local with compatible Python)
+    try:
+        from transformers import pipeline as _  # noqa: F401
+        log.info("Sentiment model: using direct transformers import")
+        return "direct"
+    except Exception:
+        pass
+
+    # Strategy 2: Subprocess to Python 3.13 (local Windows)
+    python313 = Path(r"C:\Users\Niek\AppData\Local\Python\pythoncore-3.13-64\python.exe")
+    if python313.exists():
+        log.info("Sentiment model: using subprocess to Python 3.13")
+        return "subprocess"
+
+    # Strategy 3: Regex fallback
+    log.warning("Sentiment model: falling back to regex (no BERT model available)")
+    return "regex"
+
+
+def _get_direct_pipeline():
+    """Get or create the transformers pipeline for direct mode."""
+    global _MODEL_PIPELINE
+    if _MODEL_PIPELINE is None:
+        from transformers import pipeline
+        _MODEL_PIPELINE = pipeline(
+            "text-classification",
+            model="nlptown/bert-base-multilingual-uncased-sentiment",
+            device=-1,
+            truncation=True,
+            max_length=512,
+        )
+    return _MODEL_PIPELINE
+
+
+def _classify_batch_direct(texts: list[str]) -> list[dict]:
+    """Classify texts using direct transformers import."""
+    pipe = _get_direct_pipeline()
+    results = []
+    batch_size = 32
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i : i + batch_size]
+        preds = pipe(batch, batch_size=batch_size)
+        for pred in preds:
+            stars = int(pred["label"].split(" ")[0])
+            label = "negative" if stars <= 2 else ("positive" if stars >= 4 else "neutral")
+            results.append({"label": label, "stars": stars, "confidence": round(pred["score"], 3)})
+    return results
+
+
+def _classify_batch_subprocess(texts: list[str]) -> list[dict]:
+    """Classify texts using subprocess to Python 3.13."""
+    python313 = r"C:\Users\Niek\AppData\Local\Python\pythoncore-3.13-64\python.exe"
+    worker = str(Path(__file__).parent / "sentiment_model.py")
+    payload = json.dumps({"texts": texts}).encode("utf-8")
+
+    proc = subprocess.run(
+        [python313, worker],
+        input=payload,
+        capture_output=True,
+        timeout=600,
+    )
+
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.decode("utf-8", errors="replace")[:500])
+
+    response = json.loads(proc.stdout.decode("utf-8"))
+    return response.get("results", [])
+
+
+def _load_sentiment_cache():
+    """Load cached sentiment results from disk."""
+    global _SENTIMENT_CACHE
+    if _CACHE_FILE.exists():
+        try:
+            with open(_CACHE_FILE, encoding="utf-8") as f:
+                _SENTIMENT_CACHE = json.load(f)
+            log.info("Loaded %d cached sentiment results", len(_SENTIMENT_CACHE))
+        except (json.JSONDecodeError, OSError):
+            _SENTIMENT_CACHE = {}
+
+
+def _save_sentiment_cache():
+    """Save sentiment cache to disk."""
+    _CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(_CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump(_SENTIMENT_CACHE, f, ensure_ascii=False)
+
+
+def _cache_key(text: str) -> str:
+    """Create a short cache key from text."""
+    return hashlib.md5(text.strip().lower().encode("utf-8")).hexdigest()
+
+
+def classify_texts_with_model(texts: list[str]) -> list[dict]:
+    """
+    Classify a batch of texts using the BERT sentiment model.
+
+    Tries three strategies in order:
+    1. Direct transformers import (Streamlit Cloud)
+    2. Subprocess to Python 3.13 (local Windows)
+    3. Regex fallback
+
+    Returns list of {"label": str, "stars": int, "confidence": float}.
+    """
+    global _MODEL_MODE
+    if not texts:
+        return []
+
+    # Detect mode on first call
+    if _MODEL_MODE is None:
+        _MODEL_MODE = _detect_model_mode()
+
+    # Check which texts we already have cached
+    uncached_texts = []
+    uncached_indices = []
+    results = [None] * len(texts)
+
+    for i, text in enumerate(texts):
+        key = _cache_key(text)
+        if key in _SENTIMENT_CACHE:
+            results[i] = {"label": _SENTIMENT_CACHE[key], "stars": 0, "confidence": 1.0}
+        else:
+            uncached_texts.append(text)
+            uncached_indices.append(i)
+
+    if not uncached_texts:
+        return results
+
+    log.info("Classifying %d texts with BERT model [%s] (%d cached)",
+             len(uncached_texts), _MODEL_MODE, len(texts) - len(uncached_texts))
+
+    # --- Regex fallback mode ---
+    if _MODEL_MODE == "regex":
+        for idx in uncached_indices:
+            label = _classify_sentence_sentiment(texts[idx])
+            results[idx] = {"label": label, "stars": 0, "confidence": 0.5}
+            _SENTIMENT_CACHE[_cache_key(texts[idx])] = label
+        _save_sentiment_cache()
+        return results
+
+    # --- BERT model (direct or subprocess) ---
+    chunk_size = 500
+    all_model_results = []
+
+    for chunk_start in range(0, len(uncached_texts), chunk_size):
+        chunk = uncached_texts[chunk_start : chunk_start + chunk_size]
+        log.info("  Processing chunk %d-%d of %d...",
+                 chunk_start, chunk_start + len(chunk), len(uncached_texts))
+
+        try:
+            if _MODEL_MODE == "direct":
+                chunk_results = _classify_batch_direct(chunk)
+            else:
+                chunk_results = _classify_batch_subprocess(chunk)
+            all_model_results.extend(chunk_results)
+
+        except Exception as e:
+            log.error("Sentiment model error: %s", e)
+            # Fall back to regex for this chunk
+            for text in chunk:
+                label = _classify_sentence_sentiment(text)
+                all_model_results.append({"label": label, "stars": 0, "confidence": 0.5})
+
+    # Store results in cache
+    for idx, model_result in zip(uncached_indices, all_model_results):
+        results[idx] = model_result
+        key = _cache_key(texts[idx])
+        _SENTIMENT_CACHE[key] = model_result["label"]
+
+    _save_sentiment_cache()
+    return results
+
+
+# Load cache on module import
+_load_sentiment_cache()
 
 # ============================================================
 # Stopwords: Dutch + German + English + Domain-specific
@@ -731,23 +931,90 @@ def _precompute_aspect_sentiments(df: pd.DataFrame) -> dict[int, dict[str, str]]
     """
     Pre-compute text-level sentiment for EVERY (row, aspect) combination in one pass.
 
+    Uses the BERT sentiment model to classify sentences in bulk, then maps
+    results back to (row, aspect) pairs.
+
     Returns dict: {row_index: {aspect_name: sentiment_string}}.
-    This avoids re-analyzing the same text multiple times across different functions.
     """
-    result = {}
     texts = df["aanvulling"].astype(str).str.strip()
+
+    # Step 1: For each row, find which aspects match and extract relevant sentences
+    # sentence_jobs: list of (row_idx, aspect_name, sentence_text)
+    sentence_jobs = []
+    job_lookup = {}  # (row_idx, aspect) → list of indices into sentence_jobs
 
     for idx, text in texts.items():
         if not text or text.lower() == "nan":
             continue
         text_lower = text.lower()
-        row_sentiments = {}
+
         for aspect, keywords in ASPECT_KEYWORDS.items():
-            if any(kw in text_lower for kw in keywords):
-                row_sentiments[aspect] = _get_aspect_text_sentiment(text, aspect)
-        if row_sentiments:
-            result[idx] = row_sentiments
-    return result
+            if not any(kw in text_lower for kw in keywords):
+                continue
+
+            # Extract sentences containing aspect keywords
+            sentences = re.split(r'(?<=[.!?;])\s+', text)
+            aspect_sentences = []
+            for sent in sentences:
+                if any(kw in sent.lower() for kw in keywords):
+                    aspect_sentences.append(sent.strip())
+
+            # If no sentence-level match, use full text
+            if not aspect_sentences:
+                aspect_sentences = [text[:512]]
+
+            key = (idx, aspect)
+            job_lookup[key] = []
+            for sent in aspect_sentences:
+                job_lookup[key].append(len(sentence_jobs))
+                sentence_jobs.append(sent)
+
+    if not sentence_jobs:
+        return {}
+
+    # Step 2: Deduplicate sentences for efficiency
+    unique_sentences = list(set(sentence_jobs))
+    sent_to_idx = {s: i for i, s in enumerate(unique_sentences)}
+
+    # Step 3: Classify all unique sentences with BERT in one batch
+    model_results = classify_texts_with_model(unique_sentences)
+    sent_to_label = {}
+    for sent, result in zip(unique_sentences, model_results):
+        sent_to_label[sent] = result["label"]
+
+    # Step 4: Map back to (row, aspect) using majority vote across sentences
+    output = {}
+    for (row_idx, aspect), job_indices in job_lookup.items():
+        labels = [sent_to_label.get(sentence_jobs[j], "neutral") for j in job_indices]
+        # Majority vote: count pos/neg/neutral
+        n_pos = labels.count("positive")
+        n_neg = labels.count("negative")
+        n_neu = labels.count("neutral")
+
+        if n_neg > n_pos:
+            sentiment = "negative"
+        elif n_pos > n_neg:
+            sentiment = "positive"
+        else:
+            sentiment = "neutral"
+
+        if row_idx not in output:
+            output[row_idx] = {}
+        output[row_idx][aspect] = sentiment
+
+    return output
+
+
+# Module-level cache of precomputed sentiments (set by compute_aspect_sentiment)
+_PRECOMPUTED_SENTIMENTS: dict[int, dict[str, str]] = {}
+
+
+def _get_aspect_sentiment_from_cache(row_idx: int, aspect: str) -> str:
+    """Look up sentiment from precomputed cache, fall back to regex if not available."""
+    cached = _PRECOMPUTED_SENTIMENTS.get(row_idx, {}).get(aspect)
+    if cached is not None:
+        return cached
+    return "neutral"
 
 
 def compute_aspect_sentiment(df: pd.DataFrame) -> pd.DataFrame:
@@ -764,8 +1031,10 @@ def compute_aspect_sentiment(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
 
-    # Pre-compute all sentiments once (big performance win)
+    # Pre-compute all sentiments once using BERT model (big performance win)
+    global _PRECOMPUTED_SENTIMENTS
     precomputed = _precompute_aspect_sentiments(df)
+    _PRECOMPUTED_SENTIMENTS = precomputed  # Store for reuse by other functions
 
     rows = []
     for aspect, keywords in ASPECT_KEYWORDS.items():
@@ -859,10 +1128,10 @@ def compute_aspect_yoy(df: pd.DataFrame, aspect: str) -> dict | None:
     def _count_neg_pct(subset):
         n_neg = 0
         total = 0
-        for _, row in subset.iterrows():
-            text = str(row.get("aanvulling", "")).strip()
+        for idx, row in subset.iterrows():
             review_score = row["score"] if pd.notna(row.get("score")) else None
-            text_sent = _get_aspect_text_sentiment(text, aspect)
+            # Use precomputed BERT sentiment from module-level cache
+            text_sent = _PRECOMPUTED_SENTIMENTS.get(idx, {}).get(aspect, "neutral")
 
             total += 1
             if text_sent == "negative":
@@ -940,8 +1209,8 @@ def get_aspect_quotes(
         if not is_relevant:
             continue
 
-        # Text-level sentiment for this aspect
-        text_sent = _get_aspect_text_sentiment(text, aspect)
+        # Use precomputed BERT sentiment from module-level cache
+        text_sent = _PRECOMPUTED_SENTIMENTS.get(idx, {}).get(aspect, "neutral")
 
         scored_rows.append({
             "idx": idx,

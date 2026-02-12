@@ -28,7 +28,6 @@ from app.wordcloud_engine import (
     extract_tfidf_terms, generate_wordcloud_image,
     compute_aspect_sentiment, compute_aspect_alerts,
     get_aspect_quotes, compute_aspect_yoy,
-    ASPECT_ICONS,
 )
 
 # ============================================================
@@ -699,9 +698,9 @@ elif page == "Woordenwolk & Trends":
         # Reverse order so most-negative is on top visually
         plot_df = aspect_df.sort_values("pct_negatief", ascending=True)
 
-        # Add icons to aspect labels and show mention count
+        # Aspect labels with mention count (no emoji — Streamlit renders them incorrectly)
         y_labels = [
-            f'{ASPECT_ICONS.get(a, "")} {a} ({t})'
+            f'{a} ({t})'
             for a, t in zip(plot_df["aspect"], plot_df["totaal"])
         ]
 
@@ -782,8 +781,7 @@ elif page == "Woordenwolk & Trends":
             else:
                 badge_color = COLORS["heide_paars"]
 
-            icon = ASPECT_ICONS.get(aspect_name, "")
-            with st.expander(f"{icon} {aspect_name}  —  {totaal} mentions  |  {pct_pos:.0f}% positief  |  {pct_neg:.0f}% negatief"):
+            with st.expander(f"{aspect_name}  —  {totaal} mentions  |  {pct_pos:.0f}% positief  |  {pct_neg:.0f}% negatief"):
                 # YoY comparison
                 yoy = compute_aspect_yoy(fdf, aspect_name)
                 if yoy:
