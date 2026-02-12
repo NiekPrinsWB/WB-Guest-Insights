@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(python3:*)",
+      "Bash(where:*)",
+      "Bash(netstat:*)",
+      "Bash(taskkill:*)",
+      "Bash(tasklist:*)",
+      "Bash(findstr:*)",
+      "Bash(timeout:*)",
+      "Bash(ls:*)",
+      "Bash(dir /O-D \"C:\\\\Users\\\\Niek\\\\Downloads\")",
+      "Bash(ping:*)",
+      "Bash(del:*)",
+      "Bash(streamlit run:*)"
+    ]
+  }
+}
