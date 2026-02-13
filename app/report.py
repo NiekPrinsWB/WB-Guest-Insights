@@ -105,7 +105,7 @@ def _collect_quotes_by_category(week_data):
     return result
 
 
-def generate_html_report(df, issues_df, jaar, week):
+def generate_html_report(df, jaar, week):
     """
     Generate a full HTML report matching the handmatige MT-rapport format.
     Returns complete HTML string.
@@ -656,11 +656,11 @@ def generate_theme_pdf(zoekterm, results_df, nps_result, theme_trend_data, obj_c
 
 
 # Keep backward compatibility
-def generate_week_report(df, issues_df, jaar, week):
+def generate_week_report(df, jaar, week):
     """Generate HTML report (replaces old PDF-only function)."""
-    return generate_html_report(df, issues_df, jaar, week)
+    return generate_html_report(df, jaar, week)
 
 
-def generate_html_summary(df, issues_df, jaar, week):
+def generate_html_summary(df, jaar, week):
     """Generate HTML summary - now returns the full report."""
-    return generate_html_report(df, issues_df, jaar, week)
+    return generate_html_report(df, jaar, week)

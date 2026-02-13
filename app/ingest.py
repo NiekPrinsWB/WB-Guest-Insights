@@ -5,7 +5,6 @@ import pandas as pd
 from datetime import datetime
 from app.config import VRAAG_CATEGORIE, VRAAG_LABEL, NPS_PROMOTER_MIN, NPS_PASSIVE_MIN
 from app.database import get_connection, init_db, compute_unique_key, log_ingestion
-from app.actions import generate_issues_for_response
 
 
 def _classify_nps(score):
@@ -156,20 +155,7 @@ def ingest_csv(filepath, segment, mode="full_refresh"):
     stats = {"read": len(df), "inserted": 0, "updated": 0, "skipped": 0, "error": 0}
 
     if mode == "full_refresh":
-        # Delete existing rows for this segment, but preserve issue statuses
-        existing_issues = pd.read_sql_query(
-            "SELECT unique_key, status, notitie FROM issues WHERE segment = ?",
-            conn, params=(segment,),
-        )
-        issue_status_map = {}
-        for _, row in existing_issues.iterrows():
-            issue_status_map[row["unique_key"]] = {
-                "status": row["status"],
-                "notitie": row["notitie"],
-            }
-
         conn.execute("DELETE FROM responses_raw WHERE segment = ?", (segment,))
-        conn.execute("DELETE FROM issues WHERE segment = ?", (segment,))
         conn.commit()
 
     # Convert datetime columns to string for SQLite
@@ -209,11 +195,6 @@ def ingest_csv(filepath, segment, mode="full_refresh"):
                         None if pd.isna(row["maand"]) else int(row["maand"]),
                         row["nps_groep"], now, uk,
                     ))
-                    # Mark related issues as "herzien"
-                    conn.execute(
-                        "UPDATE issues SET status = 'herzien', updated_at = ? WHERE unique_key = ?",
-                        (now, uk),
-                    )
                     stats["updated"] += 1
                     continue
 
@@ -245,10 +226,6 @@ def ingest_csv(filepath, segment, mode="full_refresh"):
 
     conn.commit()
 
-    # Generate issues for ingested data
-    _generate_all_issues(conn, df, segment, mode,
-                         issue_status_map if mode == "full_refresh" else {})
-
     stats["skipped"] = stats["read"] - stats["inserted"] - stats["updated"] - stats["error"]
     log_ingestion(conn, filepath if isinstance(filepath, str) else filepath.name,
                   segment, mode, stats)
@@ -256,42 +233,3 @@ def ingest_csv(filepath, segment, mode="full_refresh"):
     return stats
 
 
-def _generate_all_issues(conn, df, segment, mode, preserved_statuses):
-    """Generate action items from responses."""
-    now = datetime.now().isoformat()
-
-    for _, row in df.iterrows():
-        issues = generate_issues_for_response(row)
-        for issue in issues:
-            uk = row["unique_key"]
-
-            # Check if issue already exists for this unique_key + afdeling
-            existing = conn.execute(
-                "SELECT id, status, notitie FROM issues WHERE unique_key = ? AND afdeling = ?",
-                (uk, issue["afdeling"]),
-            ).fetchone()
-
-            if existing:
-                continue  # Don't duplicate
-
-            # Restore preserved status if available
-            preserved = preserved_statuses.get(uk, {})
-            status = preserved.get("status", "nieuw")
-            notitie = preserved.get("notitie", "")
-
-            conn.execute("""
-                INSERT INTO issues
-                    (unique_key, reserveringsnummer, relatie, objectsoort, objectnaam,
-                     segment, ingevuld_op, vraag, score, tekst, afdeling, prioriteit,
-                     status, notitie, created_at, updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """, (
-                uk, row.get("reserveringsnummer", ""), row.get("relatie", ""),
-                row.get("objectsoort", ""), row.get("objectnaam", ""),
-                segment, str(row.get("ingevuld_op", "")), row.get("vraag", ""),
-                None if pd.isna(row.get("score")) else float(row["score"]),
-                issue["tekst"], issue["afdeling"], issue["prioriteit"],
-                status, notitie, now, now,
-            ))
-
-    conn.commit()

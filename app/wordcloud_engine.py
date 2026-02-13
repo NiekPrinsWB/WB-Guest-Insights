@@ -786,78 +786,107 @@ def _get_aspect_text_sentiment(text: str, aspect: str) -> str:
 # Aspect-based sentiment analysis
 # ============================================================
 
-# Aspects with keywords — more granular than departments
+# Aspect categories — 10 categories aligned with MT/directie priorities
+# Each category maps to clear organisational responsibility.
+# "oud" removed (too ambiguous), "buiten" removed (too broad),
+# Wellness/Sauna removed (does not exist on the park),
+# German keywords added to capture ~17% German-language reviews.
 ASPECT_KEYWORDS = {
     "Schoonmaak": [
         "schoonmaak", "schoon", "vies", "vuil", "stof", "smerig", "schimmel",
         "spinnen", "spinnenwebben", "haar", "haren", "hygien", "stofzuig",
         "schoongemaakt", "poets", "reinig",
+        # German
+        "sauber", "dreckig", "schmutzig", "staub", "reinigung", "putzen",
     ],
-    "Bedden & Slaapcomfort": [
+    "Badkamer & Sanitair": [
+        # Accommodatie: badkamer in huisje/bungalow
+        "badkamer", "douche", "toilet", "wc", "kraan", "wastafel",
+        "douchekop", "warm water", "afvoer", "jacuzzi",
+        # Camping: sanitairgebouw / privé sanitair
+        "sanitair", "sanitairgebouw", "toiletgebouw", "douchegebouw",
+        "campingtoilet", "campingdouche", "wasruimte",
+        # German
+        "badezimmer", "dusche", "toilette", "waschbecken", "warmwasser",
+        "sanitärgebäude", "sanitär",
+    ],
+    "Slaapcomfort & Inventaris": [
+        # Bedden & slaapkwaliteit
         "bedden", "matras", "matrassen", "kussen", "slaapkamer", "slapen",
         "beddengoed", "dekbed", "lakens", "slaapcomfort", "hoofdkussen",
-    ],
-    "Badkamer": [
-        "badkamer", "douche", "toilet", "wc", "kraan", "wastafel",
-        "douchekop", "warm water", "afvoer",
-    ],
-    "Keuken & Inventaris": [
+        # Keuken & inventaris van de accommodatie
         "keuken", "pannen", "borden", "bestek", "koelkast", "vaatwasser",
         "magnetron", "oven", "kook", "inventaris", "servies",
+        # German
+        "bett", "betten", "matratze", "kissen", "schlafzimmer", "schlafen",
+        "küche", "geschirr", "kühlschrank", "besteck",
     ],
-    "Wifi & Techniek": [
+    "Onderhoud & Techniek": [
+        # Staat van de accommodatie / technische zaken
+        "onderhoud", "verouderd", "kapot", "stuk", "defect",
+        "reparatie", "slijtage", "gedateerd", "achterstallig",
+        "roest", "verf", "tocht",
+        # Wifi & technische installaties
         "wifi", "internet", "tv", "televisie", "stroom", "elektra",
-        "verwarming", "airco", "warmte", "koud", "koude",
-    ],
-    "Zwembad": [
-        "zwembad", "zwemmen", "glijbaan", "glijbanen", "waterglijbaan",
-        "zwemparadijs", "binnenbad", "buitenbad", "zwemwater",
-    ],
-    "Recreatie & Activiteiten": [
-        "speeltuin", "trampoline", "bowlen", "bowling", "fitness",
-        "animatie", "activiteit", "activiteiten", "klimmen", "sport",
-        "spelen", "sportsbar", "entertainment", "kinderactiviteit",
-    ],
-    "Wellness & Sauna": [
-        "sauna", "wellness", "spa", "stoombad", "ontspanning", "jacuzzi",
+        "verwarming", "airco",
+        # German
+        "kaputt", "defekt", "reparatur", "veraltet", "heizung",
+        "fernseher", "strom",
     ],
     "Restaurant & Horeca": [
         "restaurant", "eten", "ontbijt", "diner", "lunch", "bediening",
         "menu", "koffie", "snackbar", "terras", "brood",
+        # German
+        "essen", "frühstück", "abendessen", "mittagessen", "speisekarte",
+        "kaffee", "bedienung", "terrasse",
     ],
     "Personeel & Service": [
+        # Personeel, receptie, service-ervaring
         "personeel", "receptie", "vriendelijk", "behulpzaam", "service",
         "medewerk", "inchecken", "check-in", "ontvangst", "gastvrij",
-    ],
-    "Onderhoud & Staat": [
-        "onderhoud", "verouderd", "oud", "kapot", "stuk", "defect",
-        "slecht", "reparatie", "slijtage", "gedateerd", "achterstallig",
-        "roest", "verf", "tocht",
-    ],
-    "Prijs": [
-        "prijs", "duur", "kosten", "geld", "betaal", "goedkoop", "waarde",
-        "kwaliteit verhouding", "prijs kwaliteit",
-    ],
-    "Omgeving & Natuur": [
-        "natuur", "bos", "omgeving", "wandel", "fiets", "rust", "rustig",
-        "buiten", "tuin", "groen", "heide",
-    ],
-    "Geluid & Overlast": [
-        "geluid", "lawaai", "herrie", "overlast", "nacht", "stilte",
-        "buren", "gehorigheid", "gehorig", "muziek", "feest",
-    ],
-    "Sanitair (camping)": [
-        "sanitair", "sanitairgebouw", "toiletgebouw", "douchegebouw",
-        "campingtoilet", "campingdouche", "wasruimte",
-    ],
-    "Aankomst & Vertrek": [
+        # Aankomst & vertrek (valt onder front office)
         "aankomst", "vertrek", "inchecktijd", "check-out", "uitchecken",
         "eindschoonmaak", "sleutel", "sleutels", "aankomsttijd",
         "vertrekdag", "oplevering",
+        # German
+        "personal", "rezeption", "freundlich", "hilfsbereit",
+        "ankunft", "abreise", "schlüssel",
     ],
-    "Honden & Huisdieren": [
+    "Zwembad": [
+        "zwembad", "zwemmen", "glijbaan", "glijbanen", "waterglijbaan",
+        "zwemparadijs", "binnenbad", "buitenbad", "zwemwater",
+        # German
+        "schwimmbad", "schwimmen", "rutsche", "wasserrutsche",
+        "hallenbad", "freibad",
+    ],
+    "Animatie & Recreatie": [
+        "speeltuin", "trampoline", "bowlen", "bowling", "fitness",
+        "animatie", "activiteit", "activiteiten", "klimmen", "sport",
+        "spelen", "sportsbar", "entertainment", "kinderactiviteit",
+        # German
+        "spielplatz", "animation", "aktivität", "aktivitäten",
+        "klettern", "unterhaltung",
+    ],
+    "Prijs & Waarde": [
+        "prijs", "duur", "kosten", "geld", "betaal", "goedkoop", "waarde",
+        "kwaliteit verhouding", "prijs kwaliteit",
+        # German
+        "preis", "teuer", "kosten", "geld", "günstig", "wert",
+        "preis leistung",
+    ],
+    "Omgeving & Beleving": [
+        # Natuur & omgeving
+        "natuur", "bos", "omgeving", "wandel", "fiets", "rust", "rustig",
+        "tuin", "groen", "heide",
+        # Geluid & overlast
+        "geluid", "lawaai", "herrie", "overlast", "stilte",
+        "buren", "gehorigheid", "gehorig", "muziek", "feest",
+        # Honden & huisdieren
         "hond", "honden", "huisdier", "huisdieren", "hondenlosloop",
         "hondenweide", "uitlaat", "poep",
+        # German
+        "natur", "wald", "umgebung", "wandern", "fahrrad", "ruhe", "ruhig",
+        "lärm", "nachbarn", "hund", "hunde", "haustier",
     ],
 }
 
@@ -905,25 +934,18 @@ def _detect_aspects(text: str) -> list[str]:
     return found
 
 
-# Aspect display icons for UX
+# Aspect display icons (kept for potential future use / exports)
 ASPECT_ICONS = {
     "Schoonmaak": "🧹",
-    "Bedden & Slaapcomfort": "🛏️",
-    "Badkamer": "🚿",
-    "Keuken & Inventaris": "🍳",
-    "Wifi & Techniek": "📶",
-    "Zwembad": "🏊",
-    "Recreatie & Activiteiten": "🎯",
-    "Wellness & Sauna": "♨️",
+    "Badkamer & Sanitair": "🚿",
+    "Slaapcomfort & Inventaris": "🛏️",
+    "Onderhoud & Techniek": "🔧",
     "Restaurant & Horeca": "🍽️",
     "Personeel & Service": "👋",
-    "Onderhoud & Staat": "🔧",
-    "Prijs": "💰",
-    "Omgeving & Natuur": "🌲",
-    "Geluid & Overlast": "🔊",
-    "Sanitair (camping)": "🚻",
-    "Aankomst & Vertrek": "🔑",
-    "Honden & Huisdieren": "🐕",
+    "Zwembad": "🏊",
+    "Animatie & Recreatie": "🎯",
+    "Prijs & Waarde": "💰",
+    "Omgeving & Beleving": "🌲",
 }
 
 

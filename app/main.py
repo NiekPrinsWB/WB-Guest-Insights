@@ -18,8 +18,7 @@ from app.config import (
 )
 from app.style import apply_style
 from app.database import (
-    get_connection, init_db, load_responses, load_issues,
-    update_issue_status, log_ingestion,
+    get_connection, init_db, load_responses, log_ingestion,
 )
 from app.ingest import ingest_csv
 from app.nps import calc_nps, nps_by_group, nps_trend, nps_yoy, leaderboard
@@ -60,17 +59,11 @@ def load_data():
     return load_responses()
 
 
-@st.cache_data(ttl=60)
-def load_issues_data():
-    return load_issues()
-
-
 get_db()
 
 
 def refresh_data():
     load_data.clear()
-    load_issues_data.clear()
 
 
 # ============================================================
@@ -94,7 +87,6 @@ auto_ingest_if_needed()
 
 # Load data
 df = load_data()
-issues_df = load_issues_data()
 
 
 # ============================================================
@@ -110,7 +102,6 @@ with st.sidebar:
         "Navigatie",
         [
             "Dashboard",
-            "Actiepunten",
             "Weekrapport",
             "Thema Analyse",
             "Woordenwolk & Trends",
@@ -308,97 +299,6 @@ if page == "Dashboard":
 
 
 # ============================================================
-# PAGE: Actiepunten
-# ============================================================
-elif page == "Actiepunten":
-    st.title("Actiepunten")
-
-    if issues_df.empty:
-        st.info("Geen actiepunten gevonden. Laad eerst data via 'Data Bijwerken'.")
-        st.stop()
-
-    # Filters
-    fc1, fc2, fc3, fc4 = st.columns(4)
-    with fc1:
-        filter_dept = st.multiselect("Afdeling", sorted(issues_df["afdeling"].unique()))
-    with fc2:
-        filter_prio = st.multiselect("Prioriteit", ["P1", "P2", "P3"])
-    with fc3:
-        filter_status = st.multiselect("Status", sorted(issues_df["status"].unique()),
-                                       default=["nieuw"])
-    with fc4:
-        filter_segment_issues = st.multiselect("Segment", sorted(issues_df["segment"].dropna().unique()))
-
-    filtered_issues = issues_df.copy()
-    if filter_dept:
-        filtered_issues = filtered_issues[filtered_issues["afdeling"].isin(filter_dept)]
-    if filter_prio:
-        filtered_issues = filtered_issues[filtered_issues["prioriteit"].isin(filter_prio)]
-    if filter_status:
-        filtered_issues = filtered_issues[filtered_issues["status"].isin(filter_status)]
-    if filter_segment_issues:
-        filtered_issues = filtered_issues[filtered_issues["segment"].isin(filter_segment_issues)]
-
-    # Summary
-    s1, s2, s3, s4 = st.columns(4)
-    with s1:
-        st.metric("Totaal", len(filtered_issues))
-    with s2:
-        st.metric("P1 (Urgent)", len(filtered_issues[filtered_issues["prioriteit"] == "P1"]))
-    with s3:
-        st.metric("Nieuw", len(filtered_issues[filtered_issues["status"] == "nieuw"]))
-    with s4:
-        st.metric("In Behandeling",
-                   len(filtered_issues[filtered_issues["status"] == "in behandeling"]))
-
-    st.markdown("---")
-
-    # Issues table
-    display_cols = [
-        "id", "prioriteit", "afdeling", "status", "objectnaam", "score",
-        "tekst", "ingevuld_op", "segment",
-    ]
-    available_cols = [c for c in display_cols if c in filtered_issues.columns]
-    st.dataframe(
-        filtered_issues[available_cols].head(100),
-        width="stretch",
-        height=400,
-    )
-
-    # Status update
-    st.markdown("---")
-    st.subheader("Status Bijwerken")
-    uc1, uc2, uc3, uc4 = st.columns([1, 1, 2, 1])
-    with uc1:
-        issue_id = st.number_input("Issue ID", min_value=1, step=1)
-    with uc2:
-        new_status = st.selectbox("Nieuwe status",
-                                  ["nieuw", "in behandeling", "opgelost", "herzien"])
-    with uc3:
-        notitie = st.text_input("Notitie (optioneel)")
-    with uc4:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("Opslaan"):
-            update_issue_status(int(issue_id), new_status, notitie)
-            st.success(f"Issue {issue_id} bijgewerkt naar '{new_status}'")
-            refresh_data()
-            st.rerun()
-
-    # Export
-    st.markdown("---")
-    if st.button("Exporteer naar Excel"):
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-            filtered_issues.to_excel(writer, index=False, sheet_name="Actiepunten")
-        st.download_button(
-            "Download Excel",
-            output.getvalue(),
-            file_name=f"actiepunten_{datetime.now().strftime('%Y%m%d')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-
-
-# ============================================================
 # PAGE: Weekrapport
 # ============================================================
 elif page == "Weekrapport":
@@ -420,7 +320,7 @@ elif page == "Weekrapport":
 
     if st.button("Genereer Rapport"):
         with st.spinner("Rapport wordt gegenereerd..."):
-            html = generate_html_report(df, issues_df, rapport_jaar, rapport_week)
+            html = generate_html_report(df, rapport_jaar, rapport_week)
 
             # Store in session state for persistence
             st.session_state["weekrapport_html"] = html
@@ -689,165 +589,207 @@ elif page == "Woordenwolk & Trends":
         unsafe_allow_html=True,
     )
 
-    aspect_df = compute_aspect_sentiment(text_data)
+    # --- Segment tabs: Totaal / Accommodaties / Camping ---
+    # For the segment tabs we ignore the sidebar segment-filter so both
+    # Accommodaties and Camping are always available as tabs.
+    # Other filters (jaar, objectsoort, objectnaam) are still applied.
+    all_segments_data = df.copy()
+    if selected_jaren:
+        all_segments_data = all_segments_data[all_segments_data["jaar"].isin(selected_jaren)]
+    if selected_objectsoort:
+        all_segments_data = all_segments_data[all_segments_data["objectsoort"].isin(selected_objectsoort)]
+    if selected_objectnaam:
+        all_segments_data = all_segments_data[all_segments_data["objectnaam"].isin(selected_objectnaam)]
+    # Filter to rows with text
+    all_seg_text_mask = (
+        all_segments_data["aanvulling"].notna() &
+        (all_segments_data["aanvulling"].astype(str).str.strip() != "") &
+        (all_segments_data["aanvulling"].astype(str).str.strip().str.lower() != "nan")
+    )
+    all_segments_text = all_segments_data[all_seg_text_mask].copy()
 
-    if not aspect_df.empty:
-        # Stacked horizontal bar chart: positive vs negative per aspect
-        fig = go.Figure()
+    available_segments = all_segments_text["segment"].dropna().unique().tolist()
+    tab_labels = ["Totaal"]
+    if "Accommodaties" in available_segments:
+        tab_labels.append("Accommodaties")
+    if "Camping" in available_segments:
+        tab_labels.append("Camping")
 
-        # Reverse order so most-negative is on top visually
-        plot_df = aspect_df.sort_values("pct_negatief", ascending=True)
+    segment_tabs = st.tabs(tab_labels)
 
-        # Aspect labels with mention count (no emoji — Streamlit renders them incorrectly)
-        y_labels = [
-            f'{a} ({t})'
-            for a, t in zip(plot_df["aspect"], plot_df["totaal"])
-        ]
+    # Pre-compute sentiment for the full dataset (populates the BERT cache)
+    aspect_df_total = compute_aspect_sentiment(all_segments_text)
 
-        fig.add_trace(go.Bar(
-            y=y_labels,
-            x=plot_df["pct_positief"],
-            name="Positief",
-            orientation="h",
-            marker=dict(color=COLORS["diep_bosgroen"], cornerradius=4),
-            text=[f'{v:.0f}%' for v in plot_df["pct_positief"]],
-            textposition="inside",
-            textfont=dict(color="white", size=12),
-        ))
-        fig.add_trace(go.Bar(
-            y=y_labels,
-            x=[100 - row["pct_positief"] - row["pct_negatief"] for _, row in plot_df.iterrows()],
-            name="Neutraal",
-            orientation="h",
-            marker=dict(color=COLORS["natuurlijk_beige"], cornerradius=4),
-            textposition="none",
-        ))
-        fig.add_trace(go.Bar(
-            y=y_labels,
-            x=plot_df["pct_negatief"],
-            name="Negatief",
-            orientation="h",
-            marker=dict(color=COLORS["heide_paars"], cornerradius=4),
-            text=[f'{v:.0f}%' for v in plot_df["pct_negatief"]],
-            textposition="inside",
-            textfont=dict(color="white", size=12),
-        ))
-
-        fig.update_layout(
-            **PLOTLY_LAYOUT,
-            barmode="stack",
-            height=max(400, len(plot_df) * 44),
-            xaxis=dict(title="", showticklabels=False, showgrid=False),
-            yaxis=dict(title="", tickfont=dict(size=12)),
-            legend=dict(
-                orientation="h", yanchor="bottom", y=1.02,
-                xanchor="center", x=0.5, font=dict(size=12),
-            ),
-        )
-        st.plotly_chart(fig, width="stretch")
-
-        # --- Export knop ---
-        csv_export = aspect_df[["aspect", "positief", "negatief", "neutraal", "totaal", "pct_positief", "pct_negatief", "sentiment_score"]].copy()
-        csv_export.columns = ["Aspect", "Positief", "Negatief", "Neutraal", "Totaal", "% Positief", "% Negatief", "Sentiment Score"]
-        st.download_button(
-            "📥 Exporteer aspect-data als CSV",
-            csv_export.to_csv(index=False, sep=";").encode("utf-8-sig"),
-            file_name=f"aspect_sentiment_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-        )
-
-        st.markdown("---")
-
-        # --- Detail per aspect: YoY + quotes ---
-        st.subheader("Detail per Aspect")
-        st.markdown(
-            f'<p style="color:{COLORS["tekst_licht"]}; font-size:14px; margin-top:-8px;">'
-            f'Klik op een aspect voor jaar-op-jaar vergelijking en representatieve gastcitaten.</p>',
-            unsafe_allow_html=True,
-        )
-
-        for _, row in aspect_df.iterrows():
-            aspect_name = row["aspect"]
-            totaal = int(row["totaal"])
-            pct_neg = row["pct_negatief"]
-            pct_pos = row["pct_positief"]
-            sent_score = row["sentiment_score"]
-
-            # Color of the badge based on sentiment
-            if sent_score >= 30:
-                badge_color = COLORS["diep_bosgroen"]
-            elif sent_score >= 0:
-                badge_color = COLORS["zandgroen"]
+    for tab_idx, tab_label in enumerate(tab_labels):
+        with segment_tabs[tab_idx]:
+            # Filter data per tab
+            if tab_label == "Totaal":
+                tab_data = all_segments_text
+                aspect_df = aspect_df_total
             else:
-                badge_color = COLORS["heide_paars"]
+                tab_data = all_segments_text[all_segments_text["segment"] == tab_label]
+                if len(tab_data) < 10:
+                    st.info(f"Onvoldoende reviews voor {tab_label} (minimaal 10 nodig).")
+                    continue
+                aspect_df = compute_aspect_sentiment(tab_data)
 
-            with st.expander(f"{aspect_name}  —  {totaal} mentions  |  {pct_pos:.0f}% positief  |  {pct_neg:.0f}% negatief"):
-                # YoY comparison
-                yoy = compute_aspect_yoy(fdf, aspect_name)
-                if yoy:
-                    delta = yoy["delta"]
-                    if delta > 2:
-                        trend_icon = "\u2b06\ufe0f"
-                        trend_text = f"meer klachten ({yoy['delta']:+.1f}pp)"
-                        trend_color = COLORS["heide_paars"]
-                    elif delta < -2:
-                        trend_icon = "\u2b07\ufe0f"
-                        trend_text = f"minder klachten ({yoy['delta']:+.1f}pp)"
-                        trend_color = COLORS["diep_bosgroen"]
-                    else:
-                        trend_icon = "\u2796"
-                        trend_text = "stabiel"
-                        trend_color = COLORS["tekst_licht"]
+            if aspect_df.empty:
+                st.info("Geen aspectdata beschikbaar voor dit segment.")
+                continue
 
-                    st.markdown(
-                        f'<div style="background:{COLORS["licht_beige"]}; padding:12px 16px; '
-                        f'border-radius:8px; margin-bottom:12px;">'
-                        f'<strong>Jaar-op-jaar:</strong> '
-                        f'{yoy["prev_jaar"]}: {yoy["prev_pct_neg"]:.1f}% negatief \u2192 '
-                        f'{yoy["curr_jaar"]}: {yoy["curr_pct_neg"]:.1f}% negatief '
-                        f'<span style="color:{trend_color}; font-weight:600;">{trend_icon} {trend_text}</span>'
-                        f'</div>',
-                        unsafe_allow_html=True,
-                    )
+            # Stacked horizontal bar chart: positive vs negative per aspect
+            fig = go.Figure()
 
-                # Quotes in two columns
-                q_col1, q_col2 = st.columns(2)
+            # Reverse order so most-negative is on top visually
+            plot_df = aspect_df.sort_values("pct_negatief", ascending=True)
 
-                with q_col1:
-                    st.markdown(f'**Negatieve citaten:**')
-                    neg_quotes = get_aspect_quotes(text_data, aspect_name, "negative", 3)
-                    if neg_quotes:
-                        for q in neg_quotes:
-                            tekst = q["tekst"].encode("ascii", "replace").decode("ascii")
-                            st.markdown(
-                                f'<div style="background:#FDF0F0; border-left:3px solid {COLORS["heide_paars"]}; '
-                                f'padding:10px 14px; margin-bottom:8px; border-radius:0 6px 6px 0; font-size:13px;">'
-                                f'<div style="color:{COLORS["tekst_licht"]}; font-size:11px; margin-bottom:4px;">'
-                                f'Score {q["score"]} | {q["objectnaam"]} | {q["datum"]}</div>'
-                                f'{tekst}</div>',
-                                unsafe_allow_html=True,
-                            )
-                    else:
-                        st.markdown(f'*Geen negatieve citaten gevonden.*')
+            # Aspect labels with mention count
+            y_labels = [
+                f'{a} ({t})'
+                for a, t in zip(plot_df["aspect"], plot_df["totaal"])
+            ]
 
-                with q_col2:
-                    st.markdown(f'**Positieve citaten:**')
-                    pos_quotes = get_aspect_quotes(text_data, aspect_name, "positive", 3)
-                    if pos_quotes:
-                        for q in pos_quotes:
-                            tekst = q["tekst"].encode("ascii", "replace").decode("ascii")
-                            st.markdown(
-                                f'<div style="background:#F0F7F0; border-left:3px solid {COLORS["diep_bosgroen"]}; '
-                                f'padding:10px 14px; margin-bottom:8px; border-radius:0 6px 6px 0; font-size:13px;">'
-                                f'<div style="color:{COLORS["tekst_licht"]}; font-size:11px; margin-bottom:4px;">'
-                                f'Score {q["score"]} | {q["objectnaam"]} | {q["datum"]}</div>'
-                                f'{tekst}</div>',
-                                unsafe_allow_html=True,
-                            )
-                    else:
-                        st.markdown(f'*Geen positieve citaten gevonden.*')
-    else:
-        st.info("Onvoldoende data voor aspect-analyse.")
+            fig.add_trace(go.Bar(
+                y=y_labels,
+                x=plot_df["pct_positief"],
+                name="Positief",
+                orientation="h",
+                marker=dict(color=COLORS["diep_bosgroen"], cornerradius=4),
+                text=[f'{v:.0f}%' for v in plot_df["pct_positief"]],
+                textposition="inside",
+                textfont=dict(color="white", size=12),
+            ))
+            fig.add_trace(go.Bar(
+                y=y_labels,
+                x=[100 - row["pct_positief"] - row["pct_negatief"] for _, row in plot_df.iterrows()],
+                name="Neutraal",
+                orientation="h",
+                marker=dict(color=COLORS["natuurlijk_beige"], cornerradius=4),
+                textposition="none",
+            ))
+            fig.add_trace(go.Bar(
+                y=y_labels,
+                x=plot_df["pct_negatief"],
+                name="Negatief",
+                orientation="h",
+                marker=dict(color=COLORS["heide_paars"], cornerradius=4),
+                text=[f'{v:.0f}%' for v in plot_df["pct_negatief"]],
+                textposition="inside",
+                textfont=dict(color="white", size=12),
+            ))
+
+            fig.update_layout(
+                **PLOTLY_LAYOUT,
+                barmode="stack",
+                height=max(400, len(plot_df) * 44),
+                xaxis=dict(title="", showticklabels=False, showgrid=False),
+                yaxis=dict(title="", tickfont=dict(size=12)),
+                legend=dict(
+                    orientation="h", yanchor="bottom", y=1.02,
+                    xanchor="center", x=0.5, font=dict(size=12),
+                ),
+            )
+            st.plotly_chart(fig, width="stretch", key=f"aspect_chart_{tab_label}")
+
+            # --- Export knop ---
+            csv_export = aspect_df[["aspect", "positief", "negatief", "neutraal", "totaal", "pct_positief", "pct_negatief", "sentiment_score"]].copy()
+            csv_export.columns = ["Aspect", "Positief", "Negatief", "Neutraal", "Totaal", "% Positief", "% Negatief", "Sentiment Score"]
+            st.download_button(
+                f"📥 Exporteer aspect-data als CSV ({tab_label})",
+                csv_export.to_csv(index=False, sep=";").encode("utf-8-sig"),
+                file_name=f"aspect_sentiment_{tab_label.lower()}_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                key=f"csv_export_{tab_label}",
+            )
+
+            st.markdown("---")
+
+            # --- Detail per aspect: YoY + quotes ---
+            st.subheader("Detail per Aspect")
+            st.markdown(
+                f'<p style="color:{COLORS["tekst_licht"]}; font-size:14px; margin-top:-8px;">'
+                f'Klik op een aspect voor jaar-op-jaar vergelijking en representatieve gastcitaten.</p>',
+                unsafe_allow_html=True,
+            )
+
+            # Filter for YoY based on segment (use all_segments_data to bypass segment filter)
+            if tab_label == "Totaal":
+                fdf_segment = all_segments_data
+            else:
+                fdf_segment = all_segments_data[all_segments_data["segment"] == tab_label]
+
+            for _, row in aspect_df.iterrows():
+                aspect_name = row["aspect"]
+                totaal = int(row["totaal"])
+                pct_neg = row["pct_negatief"]
+                pct_pos = row["pct_positief"]
+                sent_score = row["sentiment_score"]
+
+                with st.expander(f"{aspect_name}  —  {totaal} mentions  |  {pct_pos:.0f}% positief  |  {pct_neg:.0f}% negatief"):
+                    # YoY comparison
+                    yoy = compute_aspect_yoy(fdf_segment, aspect_name)
+                    if yoy:
+                        delta = yoy["delta"]
+                        if delta > 2:
+                            trend_icon = "\u2b06\ufe0f"
+                            trend_text = f"meer klachten ({yoy['delta']:+.1f}pp)"
+                            trend_color = COLORS["heide_paars"]
+                        elif delta < -2:
+                            trend_icon = "\u2b07\ufe0f"
+                            trend_text = f"minder klachten ({yoy['delta']:+.1f}pp)"
+                            trend_color = COLORS["diep_bosgroen"]
+                        else:
+                            trend_icon = "\u2796"
+                            trend_text = "stabiel"
+                            trend_color = COLORS["tekst_licht"]
+
+                        st.markdown(
+                            f'<div style="background:{COLORS["licht_beige"]}; padding:12px 16px; '
+                            f'border-radius:8px; margin-bottom:12px;">'
+                            f'<strong>Jaar-op-jaar:</strong> '
+                            f'{yoy["prev_jaar"]}: {yoy["prev_pct_neg"]:.1f}% negatief \u2192 '
+                            f'{yoy["curr_jaar"]}: {yoy["curr_pct_neg"]:.1f}% negatief '
+                            f'<span style="color:{trend_color}; font-weight:600;">{trend_icon} {trend_text}</span>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                    # Quotes in two columns – use tab_data for segment-specific quotes
+                    q_col1, q_col2 = st.columns(2)
+
+                    with q_col1:
+                        st.markdown(f'**Negatieve citaten:**')
+                        neg_quotes = get_aspect_quotes(tab_data, aspect_name, "negative", 3)
+                        if neg_quotes:
+                            for q in neg_quotes:
+                                tekst = q["tekst"].encode("ascii", "replace").decode("ascii")
+                                st.markdown(
+                                    f'<div style="background:#FDF0F0; border-left:3px solid {COLORS["heide_paars"]}; '
+                                    f'padding:10px 14px; margin-bottom:8px; border-radius:0 6px 6px 0; font-size:13px;">'
+                                    f'<div style="color:{COLORS["tekst_licht"]}; font-size:11px; margin-bottom:4px;">'
+                                    f'Score {q["score"]} | {q["objectnaam"]} | {q["datum"]}</div>'
+                                    f'{tekst}</div>',
+                                    unsafe_allow_html=True,
+                                )
+                        else:
+                            st.markdown(f'*Geen negatieve citaten gevonden.*')
+
+                    with q_col2:
+                        st.markdown(f'**Positieve citaten:**')
+                        pos_quotes = get_aspect_quotes(tab_data, aspect_name, "positive", 3)
+                        if pos_quotes:
+                            for q in pos_quotes:
+                                tekst = q["tekst"].encode("ascii", "replace").decode("ascii")
+                                st.markdown(
+                                    f'<div style="background:#F0F7F0; border-left:3px solid {COLORS["diep_bosgroen"]}; '
+                                    f'padding:10px 14px; margin-bottom:8px; border-radius:0 6px 6px 0; font-size:13px;">'
+                                    f'<div style="color:{COLORS["tekst_licht"]}; font-size:11px; margin-bottom:4px;">'
+                                    f'Score {q["score"]} | {q["objectnaam"]} | {q["datum"]}</div>'
+                                    f'{tekst}</div>',
+                                    unsafe_allow_html=True,
+                                )
+                        else:
+                            st.markdown(f'*Geen positieve citaten gevonden.*')
 
 
 # ============================================================
@@ -1054,10 +996,6 @@ elif page == "Accommodatie Deep Dive":
                 f"Dit is het belangrijkste verbeterpunt."
             )
 
-        n_issues = len(issues_df[issues_df["objectsoort"] == dd_soort]) if not issues_df.empty else 0
-        if n_issues > 0:
-            summary_parts.append(f"Er zijn **{n_issues}** openstaande actiepunten voor dit type.")
-
         st.markdown("\n\n".join(summary_parts))
 
 
@@ -1136,10 +1074,8 @@ elif page == "Data Bijwerken":
     st.markdown("---")
     st.subheader("Database Statistieken")
     if not df.empty:
-        ds1, ds2, ds3 = st.columns(3)
+        ds1, ds2 = st.columns(2)
         with ds1:
             st.metric("Totaal Responses", f"{len(df):,}")
         with ds2:
-            st.metric("Totaal Issues", f"{len(issues_df):,}")
-        with ds3:
             st.metric("Database", os.path.basename(DB_PATH))

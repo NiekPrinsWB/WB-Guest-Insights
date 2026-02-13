@@ -50,27 +50,6 @@ def init_db(conn=None):
             updated_at TEXT
         );
 
-        CREATE TABLE IF NOT EXISTS issues (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            unique_key TEXT,
-            reserveringsnummer TEXT,
-            relatie TEXT,
-            objectsoort TEXT,
-            objectnaam TEXT,
-            segment TEXT,
-            ingevuld_op TEXT,
-            vraag TEXT,
-            score REAL,
-            tekst TEXT,
-            afdeling TEXT,
-            prioriteit TEXT,
-            status TEXT DEFAULT 'nieuw',
-            notitie TEXT DEFAULT '',
-            created_at TEXT,
-            updated_at TEXT,
-            FOREIGN KEY (unique_key) REFERENCES responses_raw(unique_key)
-        );
-
         CREATE TABLE IF NOT EXISTS ingestion_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT,
@@ -92,9 +71,6 @@ def init_db(conn=None):
         CREATE INDEX IF NOT EXISTS idx_responses_objectsoort ON responses_raw(objectsoort);
         CREATE INDEX IF NOT EXISTS idx_responses_objectnaam ON responses_raw(objectnaam);
         CREATE INDEX IF NOT EXISTS idx_responses_score ON responses_raw(score);
-        CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
-        CREATE INDEX IF NOT EXISTS idx_issues_afdeling ON issues(afdeling);
-        CREATE INDEX IF NOT EXISTS idx_issues_unique_key ON issues(unique_key);
     """)
     conn.commit()
     if close:
@@ -130,36 +106,6 @@ def load_responses(conn=None) -> pd.DataFrame:
         for col in ["ingevuld_op", "aankomst", "vertrek"]:
             df[col] = pd.to_datetime(df[col], errors="coerce")
     return df
-
-
-def load_issues(conn=None) -> pd.DataFrame:
-    """Load all issues from the database."""
-    close = False
-    if conn is None:
-        conn = get_connection()
-        close = True
-
-    df = pd.read_sql_query("SELECT * FROM issues ORDER BY created_at DESC", conn)
-    if close:
-        conn.close()
-    return df
-
-
-def update_issue_status(issue_id: int, status: str, notitie: str = "", conn=None):
-    """Update the status of an issue."""
-    close = False
-    if conn is None:
-        conn = get_connection()
-        close = True
-
-    now = datetime.now().isoformat()
-    conn.execute(
-        "UPDATE issues SET status = ?, notitie = ?, updated_at = ? WHERE id = ?",
-        (status, notitie, now, issue_id),
-    )
-    conn.commit()
-    if close:
-        conn.close()
 
 
 def log_ingestion(conn, filename, segment, mode, stats):
