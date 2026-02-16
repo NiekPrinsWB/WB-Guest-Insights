@@ -156,11 +156,16 @@ def ingest_csv(filepath, segment, mode="full_refresh"):
 
     if mode == "full_refresh":
         # Delete child rows in issues table first (foreign key constraint)
-        conn.execute(
-            "DELETE FROM issues WHERE unique_key IN "
-            "(SELECT unique_key FROM responses_raw WHERE segment = ?)",
-            (segment,),
-        )
+        # Table may not exist in a fresh database, so check first
+        has_issues = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='issues'"
+        ).fetchone()
+        if has_issues:
+            conn.execute(
+                "DELETE FROM issues WHERE unique_key IN "
+                "(SELECT unique_key FROM responses_raw WHERE segment = ?)",
+                (segment,),
+            )
         conn.execute("DELETE FROM responses_raw WHERE segment = ?", (segment,))
         conn.commit()
 
