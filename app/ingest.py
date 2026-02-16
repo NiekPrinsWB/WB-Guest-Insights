@@ -155,6 +155,12 @@ def ingest_csv(filepath, segment, mode="full_refresh"):
     stats = {"read": len(df), "inserted": 0, "updated": 0, "skipped": 0, "error": 0}
 
     if mode == "full_refresh":
+        # Delete child rows in issues table first (foreign key constraint)
+        conn.execute(
+            "DELETE FROM issues WHERE unique_key IN "
+            "(SELECT unique_key FROM responses_raw WHERE segment = ?)",
+            (segment,),
+        )
         conn.execute("DELETE FROM responses_raw WHERE segment = ?", (segment,))
         conn.commit()
 
