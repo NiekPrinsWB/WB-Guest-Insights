@@ -440,12 +440,12 @@ def compute_trending_topics(
     Compute term frequency per month for trending analysis.
     Returns DataFrame with columns: maand_label, term, count.
     """
-    if df.empty or "ingevuld_op" not in df.columns:
+    if df.empty or "vertrek" not in df.columns:
         return pd.DataFrame()
 
-    # Need year+month
+    # Need year+month — use vertrek (departure) date
     df = df.copy()
-    df["_datum"] = pd.to_datetime(df["ingevuld_op"], errors="coerce")
+    df["_datum"] = pd.to_datetime(df["vertrek"], errors="coerce")
     df = df[df["_datum"].notna()]
     df["_ym"] = df["_datum"].dt.to_period("M")
 
@@ -1126,7 +1126,7 @@ def compute_aspect_yoy(df: pd.DataFrame, aspect: str) -> dict | None:
 
     Returns dict with current_pct_neg, prev_pct_neg, delta, or None.
     """
-    if df.empty or "jaar" not in df.columns:
+    if df.empty or "vertrek_jaar" not in df.columns:
         return None
 
     keywords = ASPECT_KEYWORDS.get(aspect, [])
@@ -1140,7 +1140,7 @@ def compute_aspect_yoy(df: pd.DataFrame, aspect: str) -> dict | None:
     if aspect_df.empty:
         return None
 
-    jaren = sorted(aspect_df["jaar"].dropna().unique())
+    jaren = sorted(aspect_df["vertrek_jaar"].dropna().unique())
     if len(jaren) < 2:
         return None
 
@@ -1162,8 +1162,8 @@ def compute_aspect_yoy(df: pd.DataFrame, aspect: str) -> dict | None:
                 n_neg += 1
         return (n_neg / total * 100) if total > 0 else 0.0
 
-    curr = aspect_df[aspect_df["jaar"] == curr_jaar]
-    prev = aspect_df[aspect_df["jaar"] == prev_jaar]
+    curr = aspect_df[aspect_df["vertrek_jaar"] == curr_jaar]
+    prev = aspect_df[aspect_df["vertrek_jaar"] == prev_jaar]
 
     if len(curr) < 3 or len(prev) < 3:
         return None
@@ -1370,11 +1370,12 @@ def compute_aspect_alerts(
     Returns list of {aspect, recent_count, baseline_avg, change_pct, alert_type}.
     alert_type: 'spike' (significant increase) or 'improvement' (significant decrease).
     """
-    if df.empty or "ingevuld_op" not in df.columns:
+    if df.empty or "vertrek" not in df.columns:
         return []
 
+    # Use vertrek (departure) date for time-based alert detection
     df = df.copy()
-    df["_datum"] = pd.to_datetime(df["ingevuld_op"], errors="coerce")
+    df["_datum"] = pd.to_datetime(df["vertrek"], errors="coerce")
     df = df[df["_datum"].notna()]
 
     periods = sorted(df["_datum"].dt.to_period("M").dropna().unique())

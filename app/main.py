@@ -118,8 +118,8 @@ with st.sidebar:
     if not df.empty:
         st.markdown("#### Filters")
 
-        # Period filter
-        jaren = sorted(df["jaar"].dropna().unique())
+        # Period filter (based on vertrek/departure week)
+        jaren = sorted(df["vertrek_jaar"].dropna().unique())
         if jaren:
             selected_jaren = st.multiselect("Jaar", jaren, default=jaren[-1:] if jaren else [])
         else:
@@ -155,7 +155,7 @@ with st.sidebar:
 def apply_filters(data):
     filtered = data.copy()
     if selected_jaren:
-        filtered = filtered[filtered["jaar"].isin(selected_jaren)]
+        filtered = filtered[filtered["vertrek_jaar"].isin(selected_jaren)]
     if selected_segment:
         filtered = filtered[filtered["segment"].isin(selected_segment)]
     if selected_objectsoort:
@@ -388,7 +388,7 @@ elif page == "Thema Analyse":
         st.markdown("---")
 
         # Trend over time
-        if not results.empty and results["jaar"].notna().any():
+        if not results.empty and results["vertrek_jaar"].notna().any():
             st.subheader("Trend over Tijd")
             theme_trend = nps_trend(results[results["score"].notna()], "maand")
             if not theme_trend.empty:
@@ -595,7 +595,7 @@ elif page == "Woordenwolk & Trends":
     # Other filters (jaar, objectsoort, objectnaam) are still applied.
     all_segments_data = df.copy()
     if selected_jaren:
-        all_segments_data = all_segments_data[all_segments_data["jaar"].isin(selected_jaren)]
+        all_segments_data = all_segments_data[all_segments_data["vertrek_jaar"].isin(selected_jaren)]
     if selected_objectsoort:
         all_segments_data = all_segments_data[all_segments_data["objectsoort"].isin(selected_objectsoort)]
     if selected_objectnaam:
@@ -889,14 +889,14 @@ elif page == "Accommodatie Deep Dive":
 
     # Trend per year
     st.subheader("Trend door de Jaren")
-    year_trend = nps_by_group(scored_soort, "jaar", min_responses=5)
+    year_trend = nps_by_group(scored_soort, "vertrek_jaar", min_responses=5)
     if not year_trend.empty:
-        year_trend = year_trend.sort_values("jaar")
+        year_trend = year_trend.sort_values("vertrek_jaar")
         fig = px.line(
-            year_trend, x="jaar", y="nps",
+            year_trend, x="vertrek_jaar", y="nps",
             color_discrete_sequence=[COLORS["diep_bosgroen"]],
             markers=True,
-            labels={"jaar": "Jaar", "nps": "NPS"},
+            labels={"vertrek_jaar": "Jaar", "nps": "NPS"},
         )
         fig.update_layout(**PLOTLY_LAYOUT)
         fig.add_hline(y=0, line_dash="dash", line_color=COLORS["tekst_licht"], opacity=0.5)

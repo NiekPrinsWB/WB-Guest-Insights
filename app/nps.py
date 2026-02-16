@@ -48,19 +48,24 @@ def nps_trend(df, period="week"):
     """
     Calculate NPS trend over time.
     period: 'week' or 'maand'
+    Groups by vertrek (departure) date columns.
     """
+    df = df.copy()
+
     if period == "week":
-        group_cols = ["jaar", "week"]
+        group_cols = ["vertrek_jaar", "vertrek_week"]
     else:
-        group_cols = ["jaar", "maand"]
+        # Derive month from vertrek date (not from ingevuld_op-based 'maand')
+        df["vertrek_maand"] = pd.to_datetime(df["vertrek"], errors="coerce").dt.month.astype("Int64")
+        group_cols = ["vertrek_jaar", "vertrek_maand"]
 
     results = []
     for keys, group in df.groupby(group_cols):
         result = calc_nps(group, min_responses=1)
         if result:
             if period == "week":
-                result["jaar"] = keys[0]
-                result["week"] = keys[1]
+                result["vertrek_jaar"] = keys[0]
+                result["vertrek_week"] = keys[1]
                 # Create approximate date for x-axis
                 try:
                     result["datum"] = pd.Timestamp.fromisocalendar(
@@ -69,8 +74,8 @@ def nps_trend(df, period="week"):
                 except (ValueError, TypeError):
                     continue
             else:
-                result["jaar"] = keys[0]
-                result["maand"] = keys[1]
+                result["vertrek_jaar"] = keys[0]
+                result["vertrek_maand"] = keys[1]
                 try:
                     result["datum"] = pd.Timestamp(year=int(keys[0]), month=int(keys[1]), day=1)
                 except (ValueError, TypeError):
@@ -84,12 +89,12 @@ def nps_trend(df, period="week"):
 
 
 def nps_yoy(df):
-    """Year-over-year NPS comparison by category."""
+    """Year-over-year NPS comparison by category (grouped by departure year)."""
     results = []
-    for (jaar, cat), group in df.groupby(["jaar", "categorie"]):
+    for (jaar, cat), group in df.groupby(["vertrek_jaar", "categorie"]):
         result = calc_nps(group, min_responses=5)
         if result:
-            result["jaar"] = jaar
+            result["vertrek_jaar"] = jaar
             result["categorie"] = cat
             results.append(result)
     return pd.DataFrame(results)
