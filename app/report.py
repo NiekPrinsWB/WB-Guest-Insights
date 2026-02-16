@@ -64,7 +64,8 @@ def _collect_quotes_by_category(week_data):
     # Get rows with text in aanvulling
     has_text = week_data[
         (week_data["aanvulling"].notna()) &
-        (week_data["aanvulling"].astype(str).str.strip() != "")
+        (week_data["aanvulling"].astype(str).str.strip() != "") &
+        (week_data["aanvulling"].astype(str).str.strip().str.lower() != "nan")
     ].copy()
 
     # Also get "Algemene review" rows where antwoord is text
