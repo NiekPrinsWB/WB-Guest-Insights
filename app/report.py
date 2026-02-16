@@ -58,8 +58,8 @@ def _nps_delta_span(current, previous):
 
 def _collect_quotes_by_category(week_data):
     """
-    Collect all text reviews grouped by category.
-    Returns dict: {category: [list of {tekst, objectsoort, objectnaam, aankomst, score}]}
+    Collect all text reviews grouped by vraag_label (survey question).
+    Returns OrderedDict: {short_label: [list of {tekst, objectsoort, objectnaam, aankomst, score}]}
     """
     # Get rows with text in aanvulling
     has_text = week_data[
@@ -75,32 +75,58 @@ def _collect_quotes_by_category(week_data):
     ].copy()
     if not review_rows.empty:
         review_rows["aanvulling"] = review_rows["antwoord"]
+        review_rows["vraag_label"] = "Vrije review"
 
     combined = pd.concat([has_text, review_rows], ignore_index=True).drop_duplicates(
         subset=["unique_key"], keep="first"
     )
 
-    # Group into thematic categories for the report
-    cat_map = {
-        "Verblijf": "Accommodatie",
-        "Schoonmaak": "Schoonmaak",
-        "Park": "Park & Faciliteiten",
-        "Prijs/Kwaliteit": "Prijs/Kwaliteit",
-        "Algemeen": "Algemeen",
-    }
+    # Display order and short labels per vraag_label
+    label_order = [
+        "Gastvriendelijkheid",
+        "Kindvriendelijkheid",
+        "Eetgelegenheden",
+        "Supermarkt",
+        "Accommodatie",
+        "Kampeerplaats",
+        "Schoonmaak accommodatie",
+        "Sanitair/Schoonmaak",
+        "Prijs/Kwaliteit",
+        "Prijs/Kwaliteit camping",
+        "Algemeen oordeel",
+        "Vrije review",
+    ]
 
     result = {}
-    for _, row in combined.iterrows():
-        cat = cat_map.get(row.get("categorie", ""), "Overig")
-        if cat not in result:
-            result[cat] = []
-        result[cat].append({
-            "tekst": str(row["aanvulling"])[:500],
-            "objectsoort": str(row.get("objectsoort", "")),
-            "objectnaam": str(row.get("objectnaam", "")),
-            "aankomst": row.get("aankomst"),
-            "score": row.get("score"),
-        })
+    for label in label_order:
+        subset = combined[combined["vraag_label"] == label]
+        if subset.empty:
+            continue
+        quotes = []
+        for _, row in subset.iterrows():
+            quotes.append({
+                "tekst": str(row["aanvulling"])[:500],
+                "objectsoort": str(row.get("objectsoort", "")),
+                "objectnaam": str(row.get("objectnaam", "")),
+                "aankomst": row.get("aankomst"),
+                "score": row.get("score"),
+            })
+        result[label] = quotes
+
+    # Catch any rows with unmapped vraag_label
+    mapped_labels = set(label_order)
+    remaining = combined[~combined["vraag_label"].isin(mapped_labels)]
+    if not remaining.empty:
+        quotes = []
+        for _, row in remaining.iterrows():
+            quotes.append({
+                "tekst": str(row["aanvulling"])[:500],
+                "objectsoort": str(row.get("objectsoort", "")),
+                "objectnaam": str(row.get("objectnaam", "")),
+                "aankomst": row.get("aankomst"),
+                "score": row.get("score"),
+            })
+        result["Overig"] = quotes
 
     return result
 
