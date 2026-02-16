@@ -190,10 +190,10 @@ if page == "Dashboard":
     scored = fdf[fdf["score"].notna()]
     col1, col2, col3, col4, col5 = st.columns(5)
 
-    overall = calc_nps(scored)
+    overall = calc_nps(scored[scored["vraag_label"] == "Algemeen oordeel"])
     with col1:
         st.metric("Overall NPS", f"{overall['nps']:+.0f}" if overall else "-",
-                   help="Alle vragen behalve vrije review")
+                   help="Gebaseerd op 'Algemeen oordeel' vraag")
 
     for col_widget, cat_name in [
         (col2, "Schoonmaak"),

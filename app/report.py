@@ -144,10 +144,12 @@ def generate_html_report(df, jaar, week):
         if p:
             vraag_nps_prev[label] = p["nps"]
 
-    # Overall NPS (all scored responses)
-    overall_nps_curr = calc_nps(scored, min_responses=1)
+    # Overall NPS (based on "Algemeen oordeel" question only – the true NPS question)
+    algemeen_curr = scored[scored["vraag_label"] == "Algemeen oordeel"]
+    overall_nps_curr = calc_nps(algemeen_curr, min_responses=1)
     prev_scored = prev_year_data[prev_year_data["score"].notna()]
-    overall_nps_prev = calc_nps(prev_scored, min_responses=1)
+    algemeen_prev = prev_scored[prev_scored["vraag_label"] == "Algemeen oordeel"]
+    overall_nps_prev = calc_nps(algemeen_prev, min_responses=1)
 
     # NPS signals
     signals = []
