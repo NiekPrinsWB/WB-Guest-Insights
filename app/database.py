@@ -46,6 +46,8 @@ def init_db(conn=None):
             week INTEGER,
             maand INTEGER,
             nps_groep TEXT,
+            vertrek_jaar INTEGER,
+            vertrek_week INTEGER,
             created_at TEXT,
             updated_at TEXT
         );
@@ -71,6 +73,7 @@ def init_db(conn=None):
         CREATE INDEX IF NOT EXISTS idx_responses_objectsoort ON responses_raw(objectsoort);
         CREATE INDEX IF NOT EXISTS idx_responses_objectnaam ON responses_raw(objectnaam);
         CREATE INDEX IF NOT EXISTS idx_responses_score ON responses_raw(score);
+        CREATE INDEX IF NOT EXISTS idx_responses_vertrek_week ON responses_raw(vertrek_jaar, vertrek_week);
     """)
     conn.commit()
     if close:
@@ -103,6 +106,8 @@ def load_responses(conn=None) -> pd.DataFrame:
         df["jaar"] = pd.to_numeric(df["jaar"], errors="coerce").astype("Int64")
         df["week"] = pd.to_numeric(df["week"], errors="coerce").astype("Int64")
         df["maand"] = pd.to_numeric(df["maand"], errors="coerce").astype("Int64")
+        df["vertrek_jaar"] = pd.to_numeric(df["vertrek_jaar"], errors="coerce").astype("Int64")
+        df["vertrek_week"] = pd.to_numeric(df["vertrek_week"], errors="coerce").astype("Int64")
         for col in ["ingevuld_op", "aankomst", "vertrek"]:
             df[col] = pd.to_datetime(df[col], errors="coerce")
     return df

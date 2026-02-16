@@ -137,8 +137,9 @@ def generate_html_report(df, jaar, week):
     Generate a full HTML report matching the handmatige MT-rapport format.
     Returns complete HTML string.
     """
-    week_data = df[(df["jaar"] == jaar) & (df["week"] == week)]
-    prev_year_data = df[(df["jaar"] == jaar - 1) & (df["week"] == week)]
+    # Filter on vertrek (departure) week — report covers guests who stayed that week
+    week_data = df[(df["vertrek_jaar"] == jaar) & (df["vertrek_week"] == week)]
+    prev_year_data = df[(df["vertrek_jaar"] == jaar - 1) & (df["vertrek_week"] == week)]
 
     # Period string
     try:

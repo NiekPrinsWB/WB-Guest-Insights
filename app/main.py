@@ -310,11 +310,11 @@ elif page == "Weekrapport":
 
     rc1, rc2 = st.columns(2)
     with rc1:
-        jaren_all = sorted(df["jaar"].dropna().unique())
+        jaren_all = sorted(df["vertrek_jaar"].dropna().unique())
         rapport_jaar = st.selectbox("Jaar", jaren_all,
                                     index=len(jaren_all) - 1 if jaren_all else 0)
     with rc2:
-        weken = sorted(df[df["jaar"] == rapport_jaar]["week"].dropna().unique())
+        weken = sorted(df[df["vertrek_jaar"] == rapport_jaar]["vertrek_week"].dropna().unique())
         rapport_week = st.selectbox("Week", weken,
                                     index=len(weken) - 1 if weken else 0)
 

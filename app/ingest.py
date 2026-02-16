@@ -102,10 +102,15 @@ def parse_csv(filepath, segment):
     df["aankomst"] = pd.to_datetime(df["aankomst"], errors="coerce")
     df["vertrek"] = pd.to_datetime(df["vertrek"], errors="coerce")
 
-    # Extract time components
+    # Extract time components (based on ingevuld_op)
     df["jaar"] = df["ingevuld_op"].dt.isocalendar().year.astype("Int64")
     df["week"] = df["ingevuld_op"].dt.isocalendar().week.astype("Int64")
     df["maand"] = df["ingevuld_op"].dt.month.astype("Int64")
+
+    # Extract time components based on vertrek (departure) date
+    # Used by weekrapport to group by the week the guest actually stayed
+    df["vertrek_jaar"] = df["vertrek"].dt.isocalendar().year.astype("Int64")
+    df["vertrek_week"] = df["vertrek"].dt.isocalendar().week.astype("Int64")
 
     # NPS classification
     df["nps_groep"] = df["score"].apply(_classify_nps)
@@ -192,7 +197,7 @@ def ingest_csv(filepath, segment, mode="full_refresh"):
                             ingevuld_op=?, objectsoort=?, objectnaam=?, verhuurmodel=?,
                             vraag=?, antwoord=?, aanvulling=?, segment=?, categorie=?,
                             vraag_label=?, score=?, jaar=?, week=?, maand=?,
-                            nps_groep=?, updated_at=?
+                            nps_groep=?, vertrek_jaar=?, vertrek_week=?, updated_at=?
                         WHERE unique_key=?
                     """, (
                         row["reserveringsnummer"], row["relatie"], row["aankomst"],
@@ -204,7 +209,10 @@ def ingest_csv(filepath, segment, mode="full_refresh"):
                         None if pd.isna(row["jaar"]) else int(row["jaar"]),
                         None if pd.isna(row["week"]) else int(row["week"]),
                         None if pd.isna(row["maand"]) else int(row["maand"]),
-                        row["nps_groep"], now, uk,
+                        row["nps_groep"],
+                        None if pd.isna(row["vertrek_jaar"]) else int(row["vertrek_jaar"]),
+                        None if pd.isna(row["vertrek_week"]) else int(row["vertrek_week"]),
+                        now, uk,
                     ))
                     stats["updated"] += 1
                     continue
@@ -215,8 +223,9 @@ def ingest_csv(filepath, segment, mode="full_refresh"):
                     (unique_key, reserveringsnummer, relatie, aankomst, vertrek,
                      ingevuld_op, objectsoort, objectnaam, verhuurmodel, vraag,
                      antwoord, aanvulling, segment, categorie, vraag_label,
-                     score, jaar, week, maand, nps_groep, created_at, updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     score, jaar, week, maand, nps_groep,
+                     vertrek_jaar, vertrek_week, created_at, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 uk, row["reserveringsnummer"], row["relatie"], row["aankomst"],
                 row["vertrek"], row["ingevuld_op"], row["objectsoort"],
@@ -227,7 +236,10 @@ def ingest_csv(filepath, segment, mode="full_refresh"):
                 None if pd.isna(row["jaar"]) else int(row["jaar"]),
                 None if pd.isna(row["week"]) else int(row["week"]),
                 None if pd.isna(row["maand"]) else int(row["maand"]),
-                row["nps_groep"], now, now,
+                row["nps_groep"],
+                None if pd.isna(row["vertrek_jaar"]) else int(row["vertrek_jaar"]),
+                None if pd.isna(row["vertrek_week"]) else int(row["vertrek_week"]),
+                now, now,
             ))
             stats["inserted"] += 1
 
