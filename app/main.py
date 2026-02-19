@@ -67,20 +67,29 @@ def refresh_data():
 
 
 # ============================================================
-# Auto-ingest on first run if DB is empty
+# Auto-ingest: load CSVs if DB is empty OR if CSV is newer than DB
 # ============================================================
 def auto_ingest_if_needed():
+    camping_path = os.path.join(DATA_DIR, "camping.csv")
+    accom_path = os.path.join(DATA_DIR, "accommodaties.csv")
+
+    if not os.path.exists(camping_path) or not os.path.exists(accom_path):
+        return  # No CSVs available, nothing to do
+
     df = load_data()
-    if df.empty:
-        camping_path = os.path.join(DATA_DIR, "camping.csv")
-        accom_path = os.path.join(DATA_DIR, "accommodaties.csv")
-        if os.path.exists(camping_path) and os.path.exists(accom_path):
-            with st.spinner("Data wordt geladen vanuit CSV bestanden..."):
-                ingest_csv(camping_path, "Camping", "full_refresh")
-                ingest_csv(accom_path, "Accommodaties", "full_refresh")
-                refresh_data()
-            st.success("Initiële data geladen!")
-            st.rerun()
+
+    # Check if DB needs refresh: empty, or CSV file is newer than DB file
+    db_mtime = os.path.getmtime(DB_PATH) if os.path.exists(DB_PATH) else 0
+    csv_mtime = max(os.path.getmtime(camping_path), os.path.getmtime(accom_path))
+    needs_refresh = df.empty or (csv_mtime > db_mtime)
+
+    if needs_refresh:
+        with st.spinner("Data wordt geladen vanuit CSV bestanden..."):
+            ingest_csv(camping_path, "Camping", "full_refresh")
+            ingest_csv(accom_path, "Accommodaties", "full_refresh")
+            refresh_data()
+        st.success("Data bijgewerkt!")
+        st.rerun()
 
 
 auto_ingest_if_needed()
