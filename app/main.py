@@ -282,7 +282,7 @@ fdf = apply_filters(df) if not df.empty else df
 
 # Plotly layout defaults
 PLOTLY_LAYOUT = dict(
-    font=dict(family="Inter, Helvetica, sans-serif", color=COLORS["tekst_donker"]),
+    font=dict(family="DM Sans, Helvetica, sans-serif", color=COLORS["tekst_donker"]),
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor="rgba(0,0,0,0)",
     margin=dict(l=20, r=20, t=40, b=20),
