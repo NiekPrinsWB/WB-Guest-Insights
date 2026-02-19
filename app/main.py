@@ -157,8 +157,6 @@ def auto_ingest_if_needed():
             ingest_csv(camping_path, "Camping", "full_refresh")
             ingest_csv(accom_path, "Accommodaties", "full_refresh")
             refresh_data()
-        st.success("Data bijgewerkt!")
-        st.rerun()
 
 
 auto_ingest_if_needed()
