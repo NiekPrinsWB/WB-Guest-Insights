@@ -167,8 +167,18 @@ def build_week_verification_table(df_loaded: pd.DataFrame):
 
 
 # ============================================================
-# Auto-ingest: load CSVs if DB is empty OR if CSV is newer than DB
+# Auto-ingest: load CSVs if DB row count doesn't match CSV row count
 # ============================================================
+def _count_csv_rows(path: str) -> int:
+    """Count data rows in a semicolon-separated CSV (fast, no full parse)."""
+    try:
+        # Count lines minus header, skip bad lines
+        with open(path, "r", encoding="latin-1", errors="replace") as f:
+            return max(0, sum(1 for _ in f) - 1)
+    except Exception:
+        return 0
+
+
 def auto_ingest_if_needed():
     camping_path = os.path.join(DATA_DIR, "camping.csv")
     accom_path = os.path.join(DATA_DIR, "accommodaties.csv")
@@ -178,10 +188,19 @@ def auto_ingest_if_needed():
 
     df = load_data()
 
-    # Check if DB needs refresh: empty, or CSV file is newer than DB file
-    db_mtime = os.path.getmtime(DB_PATH) if os.path.exists(DB_PATH) else 0
-    csv_mtime = max(os.path.getmtime(camping_path), os.path.getmtime(accom_path))
-    needs_refresh = df.empty or (csv_mtime > db_mtime)
+    # Compare DB row counts per segment vs CSV line counts.
+    # On Streamlit Cloud all files get the same mtime at clone time so
+    # mtime comparison is unreliable — row count comparison always works.
+    db_camping_rows = int((df["segment"] == "Camping").sum()) if not df.empty else 0
+    db_accom_rows  = int((df["segment"] == "Accommodaties").sum()) if not df.empty else 0
+    csv_camping_rows = _count_csv_rows(camping_path)
+    csv_accom_rows   = _count_csv_rows(accom_path)
+
+    needs_refresh = (
+        df.empty
+        or db_camping_rows != csv_camping_rows
+        or db_accom_rows   != csv_accom_rows
+    )
 
     if needs_refresh:
         with st.spinner("Data wordt geladen vanuit CSV bestanden..."):
