@@ -132,14 +132,36 @@ def _collect_quotes_by_category(week_data):
     return result
 
 
+def _filter_week_overlap(df, jaar, week):
+    """
+    Filter rows where the stay overlaps with the given ISO week.
+    Correct method: aankomst <= week_end AND vertrek >= week_start
+    This includes guests who depart on the Monday of the next ISO week
+    (e.g. vertrek=Monday 16 Feb is ISO week 8 but the stay was in week 7).
+    Rows without aankomst/vertrek fall back to vertrek_jaar/vertrek_week columns.
+    """
+    try:
+        week_start = datetime.fromisocalendar(int(jaar), int(week), 1)
+        week_end   = week_start + timedelta(days=6)
+    except (ValueError, TypeError):
+        return df[(df["vertrek_jaar"] == jaar) & (df["vertrek_week"] == week)]
+
+    has_dates = df["aankomst"].notna() & df["vertrek"].notna()
+    overlap  = has_dates & (df["aankomst"] <= week_end) & (df["vertrek"] >= week_start)
+    fallback = ~has_dates & (df["vertrek_jaar"] == jaar) & (df["vertrek_week"] == week)
+    return df[overlap | fallback]
+
+
 def generate_html_report(df, jaar, week):
     """
     Generate a full HTML report matching the handmatige MT-rapport format.
     Returns complete HTML string.
     """
-    # Filter on vertrek (departure) week — report covers guests who stayed that week
-    week_data = df[(df["vertrek_jaar"] == jaar) & (df["vertrek_week"] == week)]
-    prev_year_data = df[(df["vertrek_jaar"] == jaar - 1) & (df["vertrek_week"] == week)]
+    # Use overlap-based filtering: a stay belongs to the week when it intersects
+    # the ISO week boundaries (aankomst <= week_end AND vertrek >= week_start).
+    # This correctly captures guests who depart on Monday of the following ISO week.
+    week_data      = _filter_week_overlap(df, jaar, week)
+    prev_year_data = _filter_week_overlap(df, jaar - 1, week)
 
     # Period string
     try:
