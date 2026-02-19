@@ -45,11 +45,18 @@ def _detect_model_mode() -> str:
     except Exception:
         pass
 
-    # Strategy 2: Subprocess to Python 3.13 (local Windows)
-    python313 = Path(r"C:\Users\Niek\AppData\Local\Python\pythoncore-3.13-64\python.exe")
-    if python313.exists():
-        log.info("Sentiment model: using subprocess to Python 3.13")
-        return "subprocess"
+    # Strategy 2: Subprocess to Python 3.13 (local Windows only)
+    # Try common install locations; skip on non-Windows or if not found
+    import platform
+    if platform.system() == "Windows":
+        candidates = [
+            Path(r"C:\Users\Niek\AppData\Local\Python\pythoncore-3.13-64\python.exe"),
+            Path(r"C:\Python313\python.exe"),
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                log.info("Sentiment model: using subprocess to Python 3.13 (%s)", candidate)
+                return "subprocess"
 
     # Strategy 3: Regex fallback
     log.warning("Sentiment model: falling back to regex (no BERT model available)")
@@ -58,22 +65,31 @@ def _detect_model_mode() -> str:
 
 def _get_direct_pipeline():
     """Get or create the transformers pipeline for direct mode."""
-    global _MODEL_PIPELINE
+    global _MODEL_PIPELINE, _MODEL_MODE
     if _MODEL_PIPELINE is None:
-        from transformers import pipeline
-        _MODEL_PIPELINE = pipeline(
-            "text-classification",
-            model="nlptown/bert-base-multilingual-uncased-sentiment",
-            device=-1,
-            truncation=True,
-            max_length=512,
-        )
+        try:
+            from transformers import pipeline
+            _MODEL_PIPELINE = pipeline(
+                "text-classification",
+                model="nlptown/bert-base-multilingual-uncased-sentiment",
+                device=-1,
+                truncation=True,
+                max_length=512,
+            )
+        except Exception as e:
+            # Model loading failed (OOM, download error, etc.) — fall back to regex
+            log.warning("BERT model load failed (%s), switching to regex fallback", e)
+            _MODEL_MODE = "regex"
+            return None
     return _MODEL_PIPELINE
 
 
 def _classify_batch_direct(texts: list[str]) -> list[dict]:
     """Classify texts using direct transformers import."""
     pipe = _get_direct_pipeline()
+    if pipe is None:
+        # Model failed to load; caller will handle the regex fallback via _MODEL_MODE
+        raise RuntimeError("Pipeline unavailable (model load failed)")
     results = []
     batch_size = 32
     for i in range(0, len(texts), batch_size):
@@ -88,7 +104,19 @@ def _classify_batch_direct(texts: list[str]) -> list[dict]:
 
 def _classify_batch_subprocess(texts: list[str]) -> list[dict]:
     """Classify texts using subprocess to Python 3.13."""
-    python313 = r"C:\Users\Niek\AppData\Local\Python\pythoncore-3.13-64\python.exe"
+    # Find the same Python 3.13 path that was detected in _detect_model_mode
+    import platform
+    python313 = None
+    if platform.system() == "Windows":
+        for candidate in [
+            r"C:\Users\Niek\AppData\Local\Python\pythoncore-3.13-64\python.exe",
+            r"C:\Python313\python.exe",
+        ]:
+            if Path(candidate).exists():
+                python313 = candidate
+                break
+    if python313 is None:
+        raise RuntimeError("Python 3.13 subprocess path not found")
     worker = str(Path(__file__).parent / "sentiment_model.py")
     payload = json.dumps({"texts": texts}).encode("utf-8")
 
@@ -272,7 +300,7 @@ _DOMAIN_STOP = {
     "nachten", "jaar", "jaren", "reservering", "boeking",
     # Generic review language
     "goed", "prima", "fijn", "leuk", "mooi", "lekker", "gezellig", "super",
-    "top", "fantastisch", "geweldig", "uitstekend", "prima", "okee", "ok",
+    "top", "fantastisch", "geweldig", "uitstekend", "okee", "ok",
     "oke", "okay", "gaat", "vond", "vinden", "vinden", "hadden", "gehad",
     # Generic verbs/adjectives in reviews
     "gebruik", "gebruikt", "gemaakt", "gedaan", "gezien", "gevonden",
@@ -871,7 +899,7 @@ ASPECT_KEYWORDS = {
         "prijs", "duur", "kosten", "geld", "betaal", "goedkoop", "waarde",
         "kwaliteit verhouding", "prijs kwaliteit",
         # German
-        "preis", "teuer", "kosten", "geld", "günstig", "wert",
+        "preis", "teuer", "günstig", "wert",
         "preis leistung",
     ],
     "Omgeving & Beleving": [

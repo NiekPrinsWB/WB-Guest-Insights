@@ -6,6 +6,7 @@ Also generates PDF via fpdf2 for download.
 import io
 import os
 import base64
+import html as html_lib
 import pandas as pd
 from datetime import datetime, timedelta
 from fpdf import FPDF
@@ -552,14 +553,14 @@ ul {{
     html += '<h2>&#128172; Gastsignalen</h2>\n'
 
     for cat_name, quotes_list in quotes_by_cat.items():
-        html += f'<h3>{cat_name} ({len(quotes_list)} citaten)</h3>\n'
+        html += f'<h3>{html_lib.escape(cat_name)} ({len(quotes_list)} citaten)</h3>\n'
         for q in quotes_list[:10]:  # Max 10 per category
-            tekst = q["tekst"]
+            tekst = html_lib.escape(q["tekst"])
             meta_parts = []
             if q["objectsoort"]:
-                meta_parts.append(q["objectsoort"])
+                meta_parts.append(html_lib.escape(q["objectsoort"]))
             if q["objectnaam"]:
-                meta_parts.append(q["objectnaam"])
+                meta_parts.append(html_lib.escape(q["objectnaam"]))
             if q["aankomst"] is not None and not pd.isna(q["aankomst"]):
                 try:
                     meta_parts.append(f"Aankomst: {q['aankomst'].strftime('%d-%m-%Y')}")
@@ -567,7 +568,7 @@ ul {{
                     pass
             meta = " &mdash; ".join(meta_parts)
             html += f"""<div class="citaat">
-"{tekst}"
+&ldquo;{tekst}&rdquo;
 <div class="citaat-meta">{meta}</div>
 </div>\n"""
 

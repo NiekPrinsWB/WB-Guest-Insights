@@ -9,6 +9,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from io import BytesIO
 from datetime import datetime, timedelta
+import html as _html
 
 # Ensure project root is in path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -427,8 +428,14 @@ elif page == "Weekrapport":
                                     index=len(jaren_all) - 1 if jaren_all else 0)
     with rc2:
         weken = sorted(df[df["vertrek_jaar"] == rapport_jaar]["vertrek_week"].dropna().unique())
-        rapport_week = st.selectbox("Week", weken,
-                                    index=len(weken) - 1 if weken else 0)
+        if weken:
+            rapport_week = st.selectbox("Week", weken, index=len(weken) - 1)
+        else:
+            st.warning("Geen weken beschikbaar voor dit jaar.")
+            rapport_week = None
+
+    if rapport_week is None:
+        st.stop()
 
     if st.button("Genereer Rapport"):
         with st.spinner("Rapport wordt gegenereerd..."):
@@ -486,6 +493,10 @@ elif page == "Thema Analyse":
         results = fdf[mask].copy()
 
         st.markdown(f"### Resultaten voor '{zoekterm}'")
+
+        if results.empty:
+            st.info(f"Geen resultaten gevonden voor '{zoekterm}'.")
+            st.stop()
 
         m1, m2, m3 = st.columns(3)
         with m1:
@@ -874,12 +885,13 @@ elif page == "Woordenwolk & Trends":
                         neg_quotes = get_aspect_quotes(tab_data, aspect_name, "negative", 3)
                         if neg_quotes:
                             for q in neg_quotes:
-                                tekst = q["tekst"].encode("ascii", "replace").decode("ascii")
+                                tekst = _html.escape(q["tekst"])
+                                obj_escaped = _html.escape(str(q["objectnaam"]))
                                 st.markdown(
                                     f'<div style="background:#FDF0F0; border-left:3px solid {COLORS["heide_paars"]}; '
                                     f'padding:10px 14px; margin-bottom:8px; border-radius:0 6px 6px 0; font-size:13px;">'
                                     f'<div style="color:{COLORS["tekst_licht"]}; font-size:11px; margin-bottom:4px;">'
-                                    f'Score {q["score"]} | {q["objectnaam"]} | {q["datum"]}</div>'
+                                    f'Score {q["score"]} | {obj_escaped} | {q["datum"]}</div>'
                                     f'{tekst}</div>',
                                     unsafe_allow_html=True,
                                 )
@@ -891,12 +903,13 @@ elif page == "Woordenwolk & Trends":
                         pos_quotes = get_aspect_quotes(tab_data, aspect_name, "positive", 3)
                         if pos_quotes:
                             for q in pos_quotes:
-                                tekst = q["tekst"].encode("ascii", "replace").decode("ascii")
+                                tekst = _html.escape(q["tekst"])
+                                obj_escaped = _html.escape(str(q["objectnaam"]))
                                 st.markdown(
                                     f'<div style="background:#F0F7F0; border-left:3px solid {COLORS["diep_bosgroen"]}; '
                                     f'padding:10px 14px; margin-bottom:8px; border-radius:0 6px 6px 0; font-size:13px;">'
                                     f'<div style="color:{COLORS["tekst_licht"]}; font-size:11px; margin-bottom:4px;">'
-                                    f'Score {q["score"]} | {q["objectnaam"]} | {q["datum"]}</div>'
+                                    f'Score {q["score"]} | {obj_escaped} | {q["datum"]}</div>'
                                     f'{tekst}</div>',
                                     unsafe_allow_html=True,
                                 )
@@ -1067,10 +1080,8 @@ elif page == "Accommodatie Deep Dive":
     else:
         for _, row in complaints.iterrows():
             score = int(row["score"]) if pd.notna(row["score"]) else "?"
-            obj = str(row.get("objectnaam", "")).strip()
-            # Clean text: replace problematic characters
-            tekst = str(row["aanvulling"]).strip()[:300]
-            tekst = tekst.encode("ascii", "replace").decode("ascii")
+            obj = _html.escape(str(row.get("objectnaam", "")).strip())
+            tekst = _html.escape(str(row["aanvulling"]).strip()[:300])
             if tekst and tekst.lower() != "nan":
                 score_color = COLORS["heide_paars"] if score <= 4 else COLORS["zandgroen"]
                 st.markdown(
@@ -1209,7 +1220,7 @@ elif page == "Data Bijwerken":
         conn = get_connection()
         log_df = pd.read_sql_query(
             "SELECT timestamp, segment, rows_read, rows_inserted, rows_updated "
-            "FROM ingestion_log ORDER BY timestamp DESC LIMIT 10",
+            "FROM ingestion_log WHERE segment != 'hash' ORDER BY timestamp DESC LIMIT 10",
             conn,
         )
         conn.close()
