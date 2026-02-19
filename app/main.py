@@ -54,7 +54,7 @@ def get_db():
     return True
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=3600)
 def load_data():
     return load_responses()
 
@@ -130,19 +130,24 @@ def _count_csv_rows(path: str) -> int:
 
 
 def auto_ingest_if_needed():
+    # Only run once per session — ingest is expensive (115k rows)
+    if st.session_state.get("_ingest_done"):
+        return
+
     camping_path = os.path.join(DATA_DIR, "camping.csv")
     accom_path = os.path.join(DATA_DIR, "accommodaties.csv")
 
     if not os.path.exists(camping_path) or not os.path.exists(accom_path):
-        return  # No CSVs available, nothing to do
+        st.session_state["_ingest_done"] = True
+        return
 
     df = load_data()
 
     # Compare DB row counts per segment vs CSV line counts.
     # On Streamlit Cloud all files get the same mtime at clone time so
     # mtime comparison is unreliable — row count comparison always works.
-    db_camping_rows = int((df["segment"] == "Camping").sum()) if not df.empty else 0
-    db_accom_rows  = int((df["segment"] == "Accommodaties").sum()) if not df.empty else 0
+    db_camping_rows  = int((df["segment"] == "Camping").sum()) if not df.empty else 0
+    db_accom_rows    = int((df["segment"] == "Accommodaties").sum()) if not df.empty else 0
     csv_camping_rows = _count_csv_rows(camping_path)
     csv_accom_rows   = _count_csv_rows(accom_path)
 
@@ -157,6 +162,9 @@ def auto_ingest_if_needed():
             ingest_csv(camping_path, "Camping", "full_refresh")
             ingest_csv(accom_path, "Accommodaties", "full_refresh")
             refresh_data()
+
+    # Mark as done for this session so subsequent page switches are instant
+    st.session_state["_ingest_done"] = True
 
 
 auto_ingest_if_needed()
