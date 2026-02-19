@@ -117,53 +117,81 @@ def build_week_verification_table(df_loaded: pd.DataFrame):
 
 
 # ============================================================
-# Auto-ingest: load CSVs if DB row count doesn't match CSV row count
+# Auto-ingest: re-ingest only when CSV content has changed (hash-based)
 # ============================================================
-def _count_csv_rows(path: str) -> int:
-    """Count data rows in a semicolon-separated CSV (fast, no full parse)."""
+def _csv_hash(path: str) -> str:
+    """Return a SHA256 hex-digest of the first 64 KB + file size.
+    Fast enough for startup, unique enough to detect any CSV change."""
+    import hashlib
     try:
-        # Count lines minus header, skip bad lines
-        with open(path, "r", encoding="latin-1", errors="replace") as f:
-            return max(0, sum(1 for _ in f) - 1)
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            head = f.read(65536)
+        return hashlib.sha256(head).hexdigest()[:16] + str(size)
     except Exception:
-        return 0
+        return ""
+
+
+def _get_stored_hash(conn, key: str) -> str:
+    """Read a key-value pair from the ingestion_log details column."""
+    try:
+        row = conn.execute(
+            "SELECT details FROM ingestion_log WHERE filename=? ORDER BY id DESC LIMIT 1",
+            (key,),
+        ).fetchone()
+        return row[0] if row else ""
+    except Exception:
+        return ""
+
+
+def _store_hash(conn, key: str, value: str):
+    """Store a hash value as a marker row in ingestion_log."""
+    try:
+        from datetime import datetime as _dt
+        conn.execute(
+            "INSERT INTO ingestion_log (timestamp, filename, segment, mode, "
+            "rows_read, rows_inserted, rows_updated, rows_skipped, rows_error, details) "
+            "VALUES (?, ?, ?, ?, 0, 0, 0, 0, 0, ?)",
+            (_dt.now().isoformat(), key, "hash", "hash", value),
+        )
+        conn.commit()
+    except Exception:
+        pass
 
 
 def auto_ingest_if_needed():
-    # Only run once per session — ingest is expensive (115k rows)
+    # Only run once per Streamlit session — ingest is expensive (115k rows)
     if st.session_state.get("_ingest_done"):
         return
 
     camping_path = os.path.join(DATA_DIR, "camping.csv")
-    accom_path = os.path.join(DATA_DIR, "accommodaties.csv")
+    accom_path   = os.path.join(DATA_DIR, "accommodaties.csv")
 
     if not os.path.exists(camping_path) or not os.path.exists(accom_path):
         st.session_state["_ingest_done"] = True
         return
 
-    df = load_data()
+    # Compute hashes of current CSV files
+    hash_c = _csv_hash(camping_path)
+    hash_a = _csv_hash(accom_path)
 
-    # Compare DB row counts per segment vs CSV line counts.
-    # On Streamlit Cloud all files get the same mtime at clone time so
-    # mtime comparison is unreliable — row count comparison always works.
-    db_camping_rows  = int((df["segment"] == "Camping").sum()) if not df.empty else 0
-    db_accom_rows    = int((df["segment"] == "Accommodaties").sum()) if not df.empty else 0
-    csv_camping_rows = _count_csv_rows(camping_path)
-    csv_accom_rows   = _count_csv_rows(accom_path)
+    conn = get_connection()
+    stored_c = _get_stored_hash(conn, "__hash_camping__")
+    stored_a = _get_stored_hash(conn, "__hash_accom__")
 
-    needs_refresh = (
-        df.empty
-        or db_camping_rows != csv_camping_rows
-        or db_accom_rows   != csv_accom_rows
-    )
+    df_check = load_data()
+    needs_refresh = df_check.empty or (hash_c != stored_c) or (hash_a != stored_a)
 
     if needs_refresh:
         with st.spinner("Data wordt geladen vanuit CSV bestanden..."):
             ingest_csv(camping_path, "Camping", "full_refresh")
             ingest_csv(accom_path, "Accommodaties", "full_refresh")
+            # Store the new hashes so next startup skips the ingest
+            _store_hash(conn, "__hash_camping__", hash_c)
+            _store_hash(conn, "__hash_accom__", hash_a)
             refresh_data()
 
-    # Mark as done for this session so subsequent page switches are instant
+    conn.close()
     st.session_state["_ingest_done"] = True
 
 
