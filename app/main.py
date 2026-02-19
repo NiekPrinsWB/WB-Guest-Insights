@@ -8,7 +8,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Ensure project root is in path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -64,6 +64,106 @@ get_db()
 
 def refresh_data():
     load_data.clear()
+
+
+def validate_csv_upload(file_bytes: bytes, segment: str):
+    """
+    Validate uploaded CSV bytes before ingestion.
+    Returns (ok: bool, message: str, row_count: int).
+    """
+    import io as _io
+    required_cols = {
+        "Reserveringsnummer", "Relatie", "Aankomst", "Vertrek",
+        "Ingevuld op", "Objectsoort", "Objectnaam", "Verhuurmodel",
+        "Vraag", "Antwoord",
+    }
+    try:
+        df_check = pd.read_csv(
+            _io.BytesIO(file_bytes),
+            sep=";",
+            encoding="latin-1",
+            dtype=str,
+            on_bad_lines="skip",
+            nrows=5,
+        )
+    except Exception as e:
+        return False, f"Kan bestand niet lezen: {e}", 0
+
+    # Drop trailing unnamed columns
+    df_check = df_check.loc[:, ~df_check.columns.str.startswith("Unnamed")]
+
+    missing = required_cols - set(df_check.columns)
+    if missing:
+        return False, f"Ontbrekende kolommen: {', '.join(sorted(missing))}", 0
+
+    # Count total rows (full parse, but only necessary columns)
+    try:
+        df_full = pd.read_csv(
+            _io.BytesIO(file_bytes),
+            sep=";",
+            encoding="latin-1",
+            dtype=str,
+            on_bad_lines="skip",
+        )
+        df_full = df_full.loc[:, ~df_full.columns.str.startswith("Unnamed")]
+        row_count = len(df_full)
+    except Exception:
+        row_count = 0
+
+    if row_count < 1:
+        return False, "Bestand bevat geen datarijen.", 0
+
+    return True, f"Validatie geslaagd: {row_count:,} rijen gevonden.", row_count
+
+
+def build_week_verification_table(df_loaded: pd.DataFrame):
+    """
+    Build a verification table for the last 3 ISO weeks using overlap logic.
+    Returns a list of dicts: {Week, Jaar, Segment, Respondenten, NPS_Algemeen}.
+    """
+    from app.nps import calc_nps as _calc_nps
+
+    rows = []
+    today = datetime.today()
+    # Determine last 3 complete ISO weeks
+    current_iso = today.isocalendar()
+    for delta_w in range(1, 4):  # 1=last week, 2=two weeks ago, 3=three weeks ago
+        target_date = today - timedelta(weeks=delta_w)
+        iso = target_date.isocalendar()
+        t_jaar = int(iso[0])
+        t_week = int(iso[1])
+
+        # Overlap filter
+        try:
+            w_start = datetime.fromisocalendar(t_jaar, t_week, 1)
+            w_end = w_start + timedelta(days=6)
+        except (ValueError, TypeError):
+            continue
+
+        has_dates = df_loaded["aankomst"].notna() & df_loaded["vertrek"].notna()
+        overlap = has_dates & (df_loaded["aankomst"] <= w_end) & (df_loaded["vertrek"] >= w_start)
+        fallback = ~has_dates & (df_loaded["vertrek_jaar"] == t_jaar) & (df_loaded["vertrek_week"] == t_week)
+        week_df = df_loaded[overlap | fallback]
+
+        # Per segment
+        segs = week_df["segment"].dropna().unique().tolist() or ["(alle)"]
+        for seg in sorted(segs):
+            seg_df = week_df[week_df["segment"] == seg] if seg != "(alle)" else week_df
+            scored_df = seg_df[seg_df["score"].notna()]
+            n_resp = int(scored_df["reserveringsnummer"].nunique()) if "reserveringsnummer" in scored_df.columns else len(scored_df)
+            alg_df = scored_df[scored_df["vraag_label"] == "Algemeen oordeel"]
+            nps_res = _calc_nps(alg_df, min_responses=1)
+            nps_str = f"{nps_res['nps']:+.1f}" if nps_res else "n.v.t."
+            rows.append({
+                "Week": t_week,
+                "Jaar": t_jaar,
+                "Periode": f"{w_start.strftime('%d-%m')} t/m {w_end.strftime('%d-%m')}",
+                "Segment": seg,
+                "Respondenten": n_resp,
+                "NPS Algemeen": nps_str,
+            })
+
+    return rows
 
 
 # ============================================================
@@ -1014,77 +1114,232 @@ elif page == "Accommodatie Deep Dive":
 elif page == "Data Bijwerken":
     st.title("Data Bijwerken")
 
-    st.markdown("""
-    Upload hier nieuwe enquêtedata. Je kunt een **volledige export** uploaden
-    (Full Refresh) of alleen de **nieuwe week** toevoegen (Append).
-    """)
-
-    mode = st.radio(
-        "Modus",
-        ["Full Refresh (aanbevolen)", "Append (alleen nieuwe data)"],
-        help="Full Refresh vervangt alle data voor het segment. Append voegt alleen nieuwe rijen toe.",
+    st.markdown(
+        "Upload hier de meest recente exports. Beide bestanden worden verwerkt met **Full Refresh** "
+        "(alle bestaande data voor dat segment wordt vervangen door de nieuwe upload). "
+        "Upload je wekelijkse totaalexport van camping én accommodaties."
     )
-    mode_key = "full_refresh" if "Full" in mode else "append"
 
     st.markdown("---")
 
+    # ── Upload widgets ──────────────────────────────────────
     col_c, col_a = st.columns(2)
-
     with col_c:
-        st.subheader("Camping")
-        camping_file = st.file_uploader("Upload camping.csv", type=["csv"], key="camping")
-        if camping_file and st.button("Verwerk Camping", key="btn_camping"):
-            with st.spinner("Camping data wordt verwerkt..."):
-                # Save temp file
-                import tempfile
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
-                    tmp.write(camping_file.getvalue())
-                    tmp_path = tmp.name
-                stats = ingest_csv(tmp_path, "Camping", mode_key)
-                os.unlink(tmp_path)
-
-            st.success("Camping data verwerkt!")
-            st.json(stats)
-            refresh_data()
+        st.subheader("🏕️ Camping")
+        camping_file = st.file_uploader(
+            "Upload camping CSV",
+            type=["csv"],
+            key="camping_upload",
+            help="Semicolon-gescheiden, latin-1 codering (export uit reserveringssysteem)",
+        )
+        if camping_file:
+            c_ok, c_msg, c_rows = validate_csv_upload(camping_file.getvalue(), "Camping")
+            if c_ok:
+                st.success(f"✅ {c_msg}")
+            else:
+                st.error(f"❌ {c_msg}")
 
     with col_a:
-        st.subheader("Accommodaties")
-        accom_file = st.file_uploader("Upload accommodaties.csv", type=["csv"], key="accom")
-        if accom_file and st.button("Verwerk Accommodaties", key="btn_accom"):
-            with st.spinner("Accommodatie data wordt verwerkt..."):
-                import tempfile
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
-                    tmp.write(accom_file.getvalue())
-                    tmp_path = tmp.name
-                stats = ingest_csv(tmp_path, "Accommodaties", mode_key)
-                os.unlink(tmp_path)
+        st.subheader("🏠 Accommodaties")
+        accom_file = st.file_uploader(
+            "Upload accommodaties CSV",
+            type=["csv"],
+            key="accom_upload",
+            help="Semicolon-gescheiden, latin-1 codering (export uit reserveringssysteem)",
+        )
+        if accom_file:
+            a_ok, a_msg, a_rows = validate_csv_upload(accom_file.getvalue(), "Accommodaties")
+            if a_ok:
+                st.success(f"✅ {a_msg}")
+            else:
+                st.error(f"❌ {a_msg}")
 
-            st.success("Accommodatie data verwerkt!")
-            st.json(stats)
-            refresh_data()
-
-    # Ingestion log
     st.markdown("---")
-    st.subheader("Ingestie Geschiedenis")
+
+    # ── Single process button ────────────────────────────────
+    both_valid = (
+        camping_file is not None and validate_csv_upload(camping_file.getvalue(), "Camping")[0]
+        and accom_file is not None and validate_csv_upload(accom_file.getvalue(), "Accommodaties")[0]
+    )
+    camping_only = camping_file is not None and validate_csv_upload(camping_file.getvalue(), "Camping")[0] if camping_file else False
+    accom_only = accom_file is not None and validate_csv_upload(accom_file.getvalue(), "Accommodaties")[0] if accom_file else False
+
+    any_valid = camping_only or accom_only
+
+    if not any_valid:
+        st.info("Upload minimaal één geldig CSV-bestand om door te gaan.")
+    else:
+        btn_label = "🔄 Verwerk uploads (Full Refresh)"
+        if st.button(btn_label, type="primary", use_container_width=True):
+            import tempfile
+            results = {}
+
+            with st.spinner("Data wordt verwerkt..."):
+                # Process Camping
+                if camping_file and camping_only:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+                        tmp.write(camping_file.getvalue())
+                        tmp_path = tmp.name
+                    try:
+                        stats_c = ingest_csv(tmp_path, "Camping", "full_refresh")
+                        results["Camping"] = stats_c
+                        # Persist to data/ so auto_ingest_if_needed picks it up on cloud reboot
+                        dest_c = os.path.join(DATA_DIR, "camping.csv")
+                        with open(dest_c, "wb") as f_out:
+                            f_out.write(camping_file.getvalue())
+                    finally:
+                        os.unlink(tmp_path)
+
+                # Process Accommodaties
+                if accom_file and accom_only:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+                        tmp.write(accom_file.getvalue())
+                        tmp_path = tmp.name
+                    try:
+                        stats_a = ingest_csv(tmp_path, "Accommodaties", "full_refresh")
+                        results["Accommodaties"] = stats_a
+                        # Persist to data/
+                        dest_a = os.path.join(DATA_DIR, "accommodaties.csv")
+                        with open(dest_a, "wb") as f_out:
+                            f_out.write(accom_file.getvalue())
+                    finally:
+                        os.unlink(tmp_path)
+
+                refresh_data()
+
+            # ── Result banners ───────────────────────────────
+            st.markdown("### Resultaat")
+            for seg_name, stats in results.items():
+                inserted = stats.get("inserted", 0)
+                updated = stats.get("updated", 0)
+                skipped = stats.get("skipped", 0)
+                errors = stats.get("error", 0)
+                total_read = stats.get("read", 0)
+
+                if errors == 0:
+                    st.success(
+                        f"✅ **{seg_name}** — {total_read:,} rijen gelezen | "
+                        f"{inserted:,} nieuw ingevoegd | {updated:,} bijgewerkt | "
+                        f"{skipped:,} overgeslagen"
+                    )
+                else:
+                    st.warning(
+                        f"⚠️ **{seg_name}** — {total_read:,} rijen gelezen | "
+                        f"{inserted:,} nieuw | {updated:,} bijgewerkt | "
+                        f"{skipped:,} overgeslagen | **{errors} fouten**"
+                    )
+                    if stats.get("details"):
+                        with st.expander("Foutdetails"):
+                            st.code(stats["details"])
+
+            st.session_state["upload_done"] = True
+            st.rerun()
+
+    # ── Post-upload: data preview + week verification ────────
+    if st.session_state.get("upload_done") or not df.empty:
+        st.markdown("---")
+        df_fresh = load_data()
+
+        if not df_fresh.empty:
+            # Data preview
+            st.subheader("📊 Data preview")
+            p1, p2, p3, p4 = st.columns(4)
+            with p1:
+                st.metric("Totaal responses", f"{len(df_fresh):,}")
+            with p2:
+                segs_in_db = df_fresh["segment"].dropna().unique()
+                st.metric("Segmenten", len(segs_in_db))
+            with p3:
+                jaren_in_db = df_fresh["vertrek_jaar"].dropna().unique()
+                if len(jaren_in_db):
+                    st.metric("Periode", f"{int(min(jaren_in_db))} – {int(max(jaren_in_db))}")
+                else:
+                    st.metric("Periode", "–")
+            with p4:
+                latest_vertrek = df_fresh["vertrek"].dropna().max()
+                if pd.notna(latest_vertrek):
+                    try:
+                        st.metric("Laatste vertrek", latest_vertrek.strftime("%d-%m-%Y"))
+                    except Exception:
+                        st.metric("Laatste vertrek", str(latest_vertrek)[:10])
+                else:
+                    st.metric("Laatste vertrek", "–")
+
+            st.markdown("---")
+
+            # Week verification table
+            st.subheader("📅 Verificatie weekrapporten (laatste 3 weken)")
+            st.markdown(
+                "Controle of de weekrapportages de juiste aantallen tonen "
+                "(gebruikt dezelfde overlap-logica als het weekrapport)."
+            )
+            with st.spinner("Weekdata wordt berekend..."):
+                week_rows = build_week_verification_table(df_fresh)
+
+            if week_rows:
+                week_verify_df = pd.DataFrame(week_rows)
+                st.dataframe(
+                    week_verify_df.rename(columns={
+                        "Week": "Week",
+                        "Jaar": "Jaar",
+                        "Periode": "Periode",
+                        "Segment": "Segment",
+                        "Respondenten": "# Respondenten",
+                        "NPS Algemeen": "NPS Algemeen oordeel",
+                    }),
+                    hide_index=True,
+                    width="stretch",
+                )
+                st.caption(
+                    "Tip: genereer het weekrapport voor de bovenste week en vergelijk "
+                    "het aantal respondenten met de kolom '# Respondenten' hierboven."
+                )
+            else:
+                st.info("Nog geen data voor de afgelopen 3 weken.")
+
+    st.markdown("---")
+
+    # ── Ingestion log ────────────────────────────────────────
+    st.subheader("📋 Ingestie geschiedenis")
     try:
         conn = get_connection()
         log_df = pd.read_sql_query(
-            "SELECT * FROM ingestion_log ORDER BY timestamp DESC LIMIT 20", conn
+            "SELECT timestamp, filename, segment, mode, rows_read, rows_inserted, "
+            "rows_updated, rows_skipped, rows_error "
+            "FROM ingestion_log ORDER BY timestamp DESC LIMIT 20",
+            conn,
         )
         conn.close()
         if not log_df.empty:
-            st.dataframe(log_df, width="stretch")
+            log_df = log_df.rename(columns={
+                "timestamp": "Tijdstip",
+                "filename": "Bestand",
+                "segment": "Segment",
+                "mode": "Modus",
+                "rows_read": "Gelezen",
+                "rows_inserted": "Ingevoegd",
+                "rows_updated": "Bijgewerkt",
+                "rows_skipped": "Overgeslagen",
+                "rows_error": "Fouten",
+            })
+            st.dataframe(log_df, hide_index=True, width="stretch")
         else:
             st.info("Nog geen ingestie uitgevoerd.")
     except Exception:
         st.info("Nog geen ingestie uitgevoerd.")
 
-    # Database stats
+    # ── Database stats ───────────────────────────────────────
     st.markdown("---")
-    st.subheader("Database Statistieken")
-    if not df.empty:
-        ds1, ds2 = st.columns(2)
+    st.subheader("🗄️ Database statistieken")
+    db_fresh = load_data()
+    if not db_fresh.empty:
+        ds1, ds2, ds3 = st.columns(3)
         with ds1:
-            st.metric("Totaal Responses", f"{len(df):,}")
+            st.metric("Totaal responses", f"{len(db_fresh):,}")
         with ds2:
-            st.metric("Database", os.path.basename(DB_PATH))
+            scored_db = db_fresh[db_fresh["score"].notna()]
+            st.metric("Met score", f"{len(scored_db):,}")
+        with ds3:
+            st.metric("Database bestand", os.path.basename(DB_PATH))
+    else:
+        st.info("Database is leeg. Upload CSV-bestanden hierboven.")
